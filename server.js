@@ -28,12 +28,21 @@ const {
 } = require("./lib/silence");
 const {
   transcribe,
+  transcribeLong,
   planEdit,
+  findClips,
+  validateClips,
   validateEdl,
   removeFillers,
   shrinkPauses,
 } = require("./lib/ai");
-const { extractAudio, buildSrt, buildAss, finishPass } = require("./lib/media");
+const {
+  extractAudio,
+  extractAudioChunked,
+  buildSrt,
+  buildAss,
+  finishPass,
+} = require("./lib/media");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -70,7 +79,7 @@ app.post(
     const b = req.body;
     const job = {
       id,
-      mode: b.mode === "ai" ? "ai" : "silence",
+      mode: ["ai", "clips", "silence"].includes(b.mode) ? b.mode : "silence",
       status: "analyzing",
       progress: 0,
       input: video.path,
@@ -91,6 +100,10 @@ app.post(
         punchIn: b.punchIn === "true",
         vertical: b.vertical === "true",
         review: b.review !== "false",
+        clipCount: b.clipCount || "auto",
+        clipLen: [30, 60, 90, 120].includes(parseInt(b.clipLen))
+          ? parseInt(b.clipLen)
+          : 60,
         musicPath: music ? music.path : null,
         musicVol: clamp(parseFloat(b.musicVol) || 0.25, 0.05, 0.8),
       },
@@ -120,16 +133,46 @@ async function processJob(job) {
     return renderJob(job, keeps);
   }
 
-  // ---- AI mode ----
+  // ---- AI + Clips modes: chunked transcription works for any length ----
   job.status = "transcribing";
-  const audioPath = job.input + ".mp3";
-  await extractAudio(job.input, audioPath);
-  const transcript = await transcribe(audioPath);
-  fs.unlink(audioPath, () => {});
+  const chunks = await extractAudioChunked(job.input, job.input, meta.duration);
+  const transcript = await transcribeLong(chunks, (i, n) => {
+    job.progress = Math.round((i / n) * 100);
+    job.stage = n > 1 ? `chunk ${i + 1} of ${n}` : "";
+  });
+  for (const c of chunks) fs.unlink(c.path, () => {});
   job.words = transcript.words || [];
   job.transcriptText = transcript.text || "";
+  job.progress = 0;
 
   job.status = "planning";
+
+  if (job.mode === "clips") {
+    const minLen = Math.round(s.clipLen * 0.6),
+      maxLen = Math.round(s.clipLen * 1.5);
+    const found = await findClips(
+      transcript,
+      { count: s.clipCount, minLen, maxLen, instruction: s.instruction },
+      meta.duration,
+    );
+    job.clipPlans = validateClips(found, meta.duration, job.words, {
+      minLen: Math.max(8, minLen * 0.7),
+      maxLen,
+    }).map((c, i) => ({
+      ...c,
+      i,
+      text: textInRange(job.words, c.start, c.end).slice(0, 220),
+    }));
+    if (s.review) {
+      job.status = "clipReview";
+      return;
+    }
+    return renderClips(
+      job,
+      job.clipPlans.map((c) => c.i),
+    );
+  }
+
   const plan = await planEdit(
     transcript,
     s.instruction,
@@ -147,6 +190,87 @@ async function processJob(job) {
     return;
   }
   return renderJob(job, keeps);
+}
+
+function textInRange(words, start, end) {
+  return words
+    .filter((w) => w.start >= start && w.end <= end)
+    .map((w) => w.word.trim())
+    .join(" ");
+}
+
+/** Render each selected clip through the full polish pipeline. */
+async function renderClips(job, selectedIdx) {
+  const s = job.settings;
+  const { duration, fps, width, height } = job.meta;
+  job.clips = [];
+  const chosen = job.clipPlans.filter((c) => selectedIdx.includes(c.i));
+  if (!chosen.length) throw new Error("No clips selected.");
+
+  for (let k = 0; k < chosen.length; k++) {
+    const c = chosen[k];
+    job.status = "cutting";
+    job.stage = `clip ${k + 1} of ${chosen.length}: ${c.title}`;
+    job.progress = Math.round((k / chosen.length) * 100);
+
+    let segs = [{ start: c.start, end: c.end }];
+    if (s.fillerRemoval) segs = removeFillers(segs, job.words);
+    if (s.shrinkPauses) segs = shrinkPauses(segs, job.words);
+    segs = quantizeSegments(segs, fps, duration);
+    const clipDur = segs.reduce((sum, x) => sum + (x.end - x.start), 0);
+
+    const out = path.join(OUTPUT_DIR, `${job.id}.c${c.i}.mp4`);
+    const needsFinish = s.captions || s.vertical;
+    const cutTarget = needsFinish
+      ? path.join(OUTPUT_DIR, `${job.id}.c${c.i}.cut.mp4`)
+      : out;
+
+    await cutVideo(job.input, cutTarget, segs, null, {
+      punchIn: s.punchIn,
+      width,
+      height,
+    });
+
+    if (needsFinish) {
+      let srtFile = null,
+        assFile = null;
+      if (s.captions) {
+        if (s.captionStyle === "bold") {
+          const ass = buildAss(job.words, segs, { vertical: s.vertical });
+          if (ass) {
+            assFile = `${job.id}.c${c.i}.ass`;
+            fs.writeFileSync(path.join(OUTPUT_DIR, assFile), ass);
+          }
+        } else {
+          const srt = buildSrt(job.words, segs);
+          if (srt) {
+            srtFile = `${job.id}.c${c.i}.srt`;
+            fs.writeFileSync(path.join(OUTPUT_DIR, srtFile), srt);
+          }
+        }
+      }
+      await finishPass(cutTarget, out, {
+        srtFile,
+        assFile,
+        captionStyle: s.captionStyle,
+        musicPath: null,
+        vertical: s.vertical,
+      });
+      fs.unlink(cutTarget, () => {});
+      for (const f of [srtFile, assFile])
+        if (f) fs.unlink(path.join(OUTPUT_DIR, f), () => {});
+    }
+    job.clips.push({
+      i: c.i,
+      title: c.title,
+      duration: clipDur,
+      start: c.start,
+      end: c.end,
+    });
+  }
+  job.status = "done";
+  job.progress = 100;
+  job.stage = "";
 }
 
 /** Shared final pipeline: filler surgery → pause shrink → quantize → cut → captions/music. */
@@ -314,6 +438,27 @@ app.post("/api/jobs/:id/render", (req, res) => {
   res.json({ ok: true });
 });
 
+app.post("/api/jobs/:id/render-clips", (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found." });
+  if (job.status !== "clipReview" && job.status !== "done")
+    return res
+      .status(400)
+      .json({ error: "Job is not awaiting clip selection." });
+  const sel = Array.isArray(req.body.selected)
+    ? req.body.selected.map(Number)
+    : [];
+  if (!sel.length)
+    return res.status(400).json({ error: "Select at least one clip." });
+  job.status = "cutting";
+  job.progress = 0;
+  renderClips(job, sel).catch((err) => {
+    job.status = "error";
+    job.error = err.message;
+  });
+  res.json({ ok: true });
+});
+
 app.get("/api/jobs/:id", (req, res) => {
   const job = jobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: "Job not found." });
@@ -349,14 +494,22 @@ app.get("/api/jobs/:id", (req, res) => {
     payload.versions = job.versions;
     payload.version = job.version;
   }
+  if (job.stage) payload.stage = job.stage;
+  if (status === "clipReview") payload.clipPlans = job.clipPlans;
+  if (job.clips) payload.clips = job.clips;
   res.json(payload);
 });
 
 app.get("/api/preview/:id", (req, res) => {
   const job = jobs.get(req.params.id);
   if (!job || job.status !== "done") return res.status(404).send("Not ready.");
-  const v = parseInt(req.query.v) || job.version;
-  const file = path.join(OUTPUT_DIR, `${job.id}.v${v}.mp4`);
+  const file =
+    req.query.c !== undefined
+      ? path.join(OUTPUT_DIR, `${job.id}.c${parseInt(req.query.c)}.mp4`)
+      : path.join(
+          OUTPUT_DIR,
+          `${job.id}.v${parseInt(req.query.v) || job.version}.mp4`,
+        );
   if (!fs.existsSync(file)) return res.status(404).send("Version not found.");
   res.sendFile(file); // sendFile handles HTTP range requests for <video> seeking
 });
@@ -364,15 +517,28 @@ app.get("/api/preview/:id", (req, res) => {
 app.get("/api/download/:id", (req, res) => {
   const job = jobs.get(req.params.id);
   if (!job || job.status !== "done") return res.status(404).send("Not ready.");
-  const v = parseInt(req.query.v) || job.version;
-  const file = path.join(OUTPUT_DIR, `${job.id}.v${v}.mp4`);
-  if (!fs.existsSync(file)) return res.status(404).send("Version not found.");
+  const isClip = req.query.c !== undefined;
+  const n = isClip
+    ? parseInt(req.query.c)
+    : parseInt(req.query.v) || job.version;
+  const file = path.join(OUTPUT_DIR, `${job.id}.${isClip ? "c" : "v"}${n}.mp4`);
+  if (!fs.existsSync(file)) return res.status(404).send("Not found.");
   const base = path.parse(job.originalName).name;
-  res.download(file, `${base}.v${v}.mp4`);
+  const clip = isClip ? (job.clips || []).find((x) => x.i === n) : null;
+  res.download(file, clip ? `${slug(clip.title)}.mp4` : `${base}.v${n}.mp4`);
 });
 
 function clamp(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v));
+}
+function slug(t) {
+  return (
+    String(t)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60) || "clip"
+  );
 }
 
 app.listen(PORT, () => {

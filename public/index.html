@@ -540,14 +540,36 @@
         background: var(--brand);
         pointer-events: none;
         z-index: 3;
+        will-change: transform;
       }
       #playhead::before {
         content: "";
         position: absolute;
         top: 0;
-        left: -4px;
-        border: 5px solid transparent;
+        left: -5px;
+        border: 6px solid transparent;
         border-top-color: var(--brand);
+      }
+      #tlInner {
+        cursor: crosshair;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      .tl-tools {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .btn.sm {
+        padding: 8px 14px;
+        font-size: 12.5px;
+      }
+      .tl-tools .hintk {
+        margin-left: auto;
+        font-size: 11px;
+        color: var(--faint);
       }
       .actions {
         display: flex;
@@ -783,8 +805,8 @@
           <div class="tl-cap">
             <b>Timeline</b
             ><span
-              >drag clip edges to trim · click a clip to seek · striped =
-              cut</span
+              >click or drag to scrub · split · delete · drag edges to
+              trim</span
             >
           </div>
           <div id="tlWrap">
@@ -794,22 +816,17 @@
               <div id="playhead" style="left: 0"></div>
             </div>
           </div>
+          <div class="tl-tools">
+            <button class="btn sm" id="splitBtn">✂ Split at playhead</button>
+            <button class="btn sm" id="delBtn">Delete segment</button>
+            <button class="btn sm" id="undoBtn">Undo</button>
+            <span class="hintk"
+              >shortcuts: S = split · Del = delete/restore</span
+            >
+          </div>
           <div id="inspector">
             <div class="tcline" id="insTc"></div>
             <div class="txt" id="insTxt"></div>
-            <div class="nudges">
-              <span class="nud"
-                >start <button data-n="s-">−</button
-                ><button data-n="s+">+</button></span
-              >
-              <span class="nud"
-                >end <button data-n="e-">−</button
-                ><button data-n="e+">+</button></span
-              >
-              <button class="btn" id="insToggle" style="padding: 7px 14px">
-                Toggle keep / cut
-              </button>
-            </div>
           </div>
 
           <div class="actions">
@@ -1088,6 +1105,8 @@
         }));
         selIdx = -1;
         $("inspector").style.display = "none";
+        undoStack = [];
+        phSrc = 0;
         renderTl();
         $("rerenderBtn").onclick = () =>
           submitRender(tlBlocks, "Re-rendering with your timeline changes…");
@@ -1132,7 +1151,10 @@
         $("download").href = "/api/download/" + jobId + "?v=" + v;
       }
       let pps = 40,
-        versionSegs = [];
+        versionSegs = [],
+        phSrc = 0,
+        blockEls = [],
+        undoStack = [];
 
       function layoutTl() {
         const wrapW = $("tlWrap").clientWidth - 2;
@@ -1146,6 +1168,7 @@
           track = $("track");
         ruler.innerHTML = "";
         track.innerHTML = "";
+        blockEls = [];
         const step = pps >= 60 ? 1 : pps >= 28 ? 2 : pps >= 12 ? 5 : 10;
         for (let t = 0; t <= jobDuration; t += step) {
           const tick = el("div", "tick");
@@ -1162,37 +1185,61 @@
           );
           d.style.left = b.start * pps + "px";
           d.style.width = Math.max((b.end - b.start) * pps, 6) + "px";
-          d.title = fmt(b.start) + " → " + fmt(b.end);
           if (b.type === "keep") {
             const hl = el("div", "h l"),
               hr = el("div", "h r");
-            hl.onpointerdown = (e) => startDrag(e, i, "l");
-            hr.onpointerdown = (e) => startDrag(e, i, "r");
+            hl.onpointerdown = (e) => startTrim(e, i, "l");
+            hr.onpointerdown = (e) => startTrim(e, i, "r");
             d.append(hl, hr);
           }
-          d.onclick = (e) => {
-            if (dragging) return;
-            selIdx = i;
-            renderTl();
-            renderInspector();
-            if (b.type === "keep") {
-              const srcT = b.start + e.offsetX / pps;
-              const outT = srcToOut(srcT);
-              if (outT !== null) {
-                $("preview").currentTime = outT;
-              }
-            }
-          };
           track.appendChild(d);
+          blockEls.push(d);
         });
+        setPlayhead(phSrc, false);
+        updateToolbar();
       }
 
-      /* --- edge dragging --- */
-      let dragging = null;
-      function startDrag(e, idx, side) {
+      /* --- playhead + scrubbing (Premiere-style: click or drag anywhere) --- */
+      function setPlayhead(src, seek = true) {
+        phSrc = Math.max(0, Math.min(jobDuration, src));
+        $("playhead").style.transform = "translateX(" + phSrc * pps + "px)";
+        if (seek) {
+          const outT = srcToOut(phSrc);
+          if (outT !== null && isFinite(outT)) $("preview").currentTime = outT;
+        }
+      }
+      let scrubbing = false;
+      $("tlInner").addEventListener("pointerdown", (e) => {
+        if (e.target.classList.contains("h")) return; // trim handles handle themselves
+        scrubbing = true;
+        $("tlInner").setPointerCapture(e.pointerId);
+        const x = e.clientX - $("tlInner").getBoundingClientRect().left;
+        const src = x / pps;
+        selIdx = tlBlocks.findIndex((b) => src >= b.start && src <= b.end);
+        refreshSelection();
+        setPlayhead(src);
+      });
+      $("tlInner").addEventListener("pointermove", (e) => {
+        if (!scrubbing) return;
+        const x = e.clientX - $("tlInner").getBoundingClientRect().left;
+        setPlayhead(x / pps);
+      });
+      $("tlInner").addEventListener("pointerup", () => (scrubbing = false));
+      $("tlInner").addEventListener("pointercancel", () => (scrubbing = false));
+
+      function refreshSelection() {
+        blockEls.forEach((d, i) => d.classList.toggle("sel", i === selIdx));
+        renderInspector();
+        updateToolbar();
+      }
+
+      /* --- trimming: update styles directly during drag, rebuild only on release --- */
+      let trim = null;
+      function startTrim(e, idx, side) {
         e.stopPropagation();
         e.preventDefault();
-        dragging = {
+        pushUndo();
+        trim = {
           idx,
           side,
           x0: e.clientX,
@@ -1200,44 +1247,112 @@
           e0: tlBlocks[idx].end,
         };
         e.target.setPointerCapture(e.pointerId);
-        e.target.onpointermove = onDrag;
-        e.target.onpointerup = e.target.onpointercancel = endDrag;
+        e.target.onpointermove = onTrim;
+        e.target.onpointerup = e.target.onpointercancel = endTrim;
       }
-      function onDrag(e) {
-        if (!dragging) return;
-        const { idx, side, x0, s0, e0 } = dragging;
+      function onTrim(e) {
+        if (!trim) return;
+        const { idx, side, x0, s0, e0 } = trim;
         const b = tlBlocks[idx],
           prev = tlBlocks[idx - 1],
           next = tlBlocks[idx + 1];
         const dt = (e.clientX - x0) / pps,
           MIN = 0.12;
         if (side === "l") {
-          let v = Math.max(
+          const v = Math.max(
             prev ? prev.start + MIN : 0,
             Math.min(s0 + dt, b.end - MIN),
           );
           b.start = v;
           if (prev) prev.end = v;
         } else {
-          let v = Math.min(
+          const v = Math.min(
             next ? next.end - MIN : jobDuration,
             Math.max(e0 + dt, b.start + MIN),
           );
           b.end = v;
           if (next) next.start = v;
         }
-        requestAnimationFrame(() => {
-          renderTl();
-          if (idx === selIdx) renderInspector();
-        });
+        // Direct style updates — never rebuild mid-drag, or pointer capture dies.
+        for (const i of [idx - 1, idx, idx + 1]) {
+          if (blockEls[i] && tlBlocks[i]) {
+            blockEls[i].style.left = tlBlocks[i].start * pps + "px";
+            blockEls[i].style.width =
+              Math.max((tlBlocks[i].end - tlBlocks[i].start) * pps, 6) + "px";
+          }
+        }
+        if (idx === selIdx) renderInspector();
       }
-      function endDrag(e) {
-        dragging = null;
-        setTimeout(() => (dragging = null), 50);
+      function endTrim(e) {
         e.target.onpointermove = null;
+        trim = null;
+        renderTl();
       }
 
-      /* --- playhead: output time <-> source time --- */
+      /* --- split / delete / undo --- */
+      function pushUndo() {
+        undoStack.push(
+          tlBlocks.map((b) => ({ ...b, words: [...(b.words || [])] })),
+        );
+        if (undoStack.length > 40) undoStack.shift();
+      }
+      $("splitBtn").onclick = () => {
+        const i = tlBlocks.findIndex(
+          (b) => phSrc > b.start + 0.12 && phSrc < b.end - 0.12,
+        );
+        if (i < 0) return;
+        pushUndo();
+        const b = tlBlocks[i];
+        // Blocks only carry word indices (no timing), so split the text list
+        // proportionally for display; captions are rebuilt from real word
+        // timestamps at render anyway.
+        const words = b.words || [];
+        const cutAt = Math.round(
+          ((phSrc - b.start) / (b.end - b.start)) * words.length,
+        );
+        const left = { ...b, end: phSrc, words: words.slice(0, cutAt) };
+        const right = { ...b, start: phSrc, words: words.slice(cutAt) };
+        tlBlocks.splice(i, 1, left, right);
+        selIdx = i + 1;
+        renderTl();
+        refreshSelection();
+      };
+      $("delBtn").onclick = () => {
+        const b = tlBlocks[selIdx];
+        if (!b) return;
+        pushUndo();
+        b.type = b.type === "keep" ? "cut" : "keep";
+        renderTl();
+        refreshSelection();
+      };
+      $("undoBtn").onclick = () => {
+        const snap = undoStack.pop();
+        if (!snap) return;
+        tlBlocks = snap;
+        if (selIdx >= tlBlocks.length) selIdx = -1;
+        renderTl();
+        refreshSelection();
+      };
+      document.addEventListener("keydown", (e) => {
+        if ($("resultPanel").style.display !== "block") return;
+        if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")
+          return;
+        if (e.key === "s" || e.key === "S") $("splitBtn").click();
+        if (e.key === "Delete" || e.key === "Backspace") {
+          e.preventDefault();
+          $("delBtn").click();
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === "z") $("undoBtn").click();
+      });
+      function updateToolbar() {
+        const b = tlBlocks[selIdx];
+        $("delBtn").textContent =
+          b && b.type === "cut" ? "Restore segment" : "Delete segment";
+        $("delBtn").disabled = !b;
+        $("undoBtn").disabled = !undoStack.length;
+      }
+
+      /* --- output time <-> source time --- */
       function outToSrc(t) {
         let acc = 0;
         for (const s of versionSegs) {
@@ -1251,14 +1366,15 @@
         let acc = 0;
         for (const s of versionSegs) {
           if (srcT >= s.start && srcT <= s.end) return acc + (srcT - s.start);
+          if (srcT < s.start) return acc; // in a cut gap: snap to next kept moment
           acc += s.end - s.start;
         }
         return null;
       }
       $("preview").addEventListener("timeupdate", () => {
-        if (!versionSegs.length) return;
-        $("playhead").style.left =
-          outToSrc($("preview").currentTime) * pps + "px";
+        if (!versionSegs.length || scrubbing) return;
+        phSrc = outToSrc($("preview").currentTime);
+        $("playhead").style.transform = "translateX(" + phSrc * pps + "px)";
       });
       window.addEventListener("resize", () => {
         if ($("resultPanel").style.display === "block") renderTl();
@@ -1273,46 +1389,11 @@
           " → " +
           fmt(b.end) +
           "  ·  " +
-          (b.type === "keep" ? "KEPT" : "CUT");
+          (b.type === "keep" ? "KEPT" : "CUT") +
+          "  ·  double-click a word to fix it";
         const txt = $("insTxt");
         txt.innerHTML = "";
         renderWords(txt, b.words);
-        $("insToggle").onclick = () => {
-          b.type = b.type === "keep" ? "cut" : "keep";
-          renderTl();
-          renderInspector();
-        };
-        document
-          .querySelectorAll(".nud button")
-          .forEach((btn) => (btn.onclick = () => nudge(btn.dataset.n)));
-      }
-      function nudge(op) {
-        const b = tlBlocks[selIdx];
-        if (!b) return;
-        const d = 0.1,
-          MIN = 0.12;
-        const prev = tlBlocks[selIdx - 1],
-          next = tlBlocks[selIdx + 1];
-        if (op === "s-" && prev && prev.end - prev.start - d >= MIN) {
-          b.start -= d;
-          prev.end -= d;
-        }
-        if (op === "s+" && b.end - b.start - d >= MIN) {
-          b.start += d;
-          if (prev) prev.end += d;
-        }
-        if (op === "e-" && b.end - b.start - d >= MIN) {
-          b.end -= d;
-          if (next) next.start -= d;
-        }
-        if (op === "e+" && next && next.end - next.start - d >= MIN) {
-          b.end += d;
-          next.start += d;
-        }
-        b.start = Math.max(0, b.start);
-        b.end = Math.min(jobDuration, b.end);
-        renderTl();
-        renderInspector();
       }
 
       /* ---------- render submit ---------- */

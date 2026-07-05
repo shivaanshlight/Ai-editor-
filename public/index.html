@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ClipSurgeon</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg:#fafafa; --surface:#ffffff; --line:#e8e8e8; --line-2:#d4d4d4;
+    --ink:#0a0a0a; --muted:#737373; --faint:#a3a3a3;
+    --keep:#16a34a; --keep-bg:#f0fdf4; --cut:#dc2626; --cut-bg:#fef2f2;
+    --brand:#f59e0b; --r:8px;
+  }
+  * { box-sizing:border-box; margin:0; }
+  html { -webkit-text-size-adjust:100%; }
+  body { background:var(--bg); color:var(--ink); font-family:Inter,system-ui,sans-serif; font-size:14px; line-height:1.5; }
+  .mono { font-family:"JetBrains Mono",monospace; }
+  button, input, select, textarea { font:inherit; color:inherit; }
+
+  nav { display:flex; align-items:center; justify-content:space-between; max-width:920px; margin:0 auto; padding:18px 20px; }
+  .brand { font-weight:600; font-size:15px; letter-spacing:-.01em; display:flex; align-items:center; gap:8px; }
+  .brand i { width:14px; height:14px; background:var(--brand); border-radius:3px; display:inline-block; transform:rotate(45deg) scale(.8); }
+  .seg { display:flex; background:var(--surface); border:1px solid var(--line); border-radius:99px; padding:3px; }
+  .seg button { border:0; background:transparent; border-radius:99px; padding:6px 16px; font-size:13px; font-weight:500; color:var(--muted); cursor:pointer; }
+  .seg button.on { background:var(--ink); color:#fff; }
+
+  main { max-width:920px; margin:0 auto; padding:12px 20px 96px; }
+  h1 { font-size:clamp(22px,4vw,30px); font-weight:600; letter-spacing:-.02em; margin:22px 0 6px; }
+  .sub { color:var(--muted); max-width:560px; }
+
+  #drop { margin-top:26px; border:1.5px dashed var(--line-2); border-radius:12px; background:var(--surface); padding:44px 20px; text-align:center; cursor:pointer; transition:.15s; }
+  #drop:hover, #drop.over { border-color:var(--ink); }
+  #drop .big { font-weight:500; }
+  #drop .hint { color:var(--faint); font-size:12.5px; margin-top:5px; }
+  #fileInput { display:none; }
+
+  .panel { margin-top:18px; }
+  .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+  @media (max-width:640px){ .grid3 { grid-template-columns:1fr; } }
+  .field { background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:12px 14px; }
+  .field label { display:flex; justify-content:space-between; font-size:12px; color:var(--muted); margin-bottom:8px; font-weight:500; }
+  .field .val { color:var(--ink); }
+  input[type=range] { width:100%; accent-color:var(--ink); }
+  .in { width:100%; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px 10px; font-size:13px; }
+  .in:focus { outline:none; border-color:var(--ink); }
+
+  .chips { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  .chip { padding:7px 14px; border-radius:99px; background:var(--surface); border:1px solid var(--line); color:var(--muted); font-size:13px; cursor:pointer; }
+  .chip:hover { border-color:var(--ink); color:var(--ink); }
+  .chip.on { background:var(--ink); border-color:var(--ink); color:#fff; }
+  textarea#instruction { width:100%; min-height:76px; background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:12px 14px; resize:vertical; }
+  textarea#instruction:focus { outline:none; border-color:var(--ink); }
+
+  .toggles { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:6px 18px; margin-top:14px; }
+  .tog { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted); cursor:pointer; padding:5px 0; }
+  .tog input { accent-color:var(--ink); width:15px; height:15px; }
+
+  /* Job section */
+  #jobCard { margin-top:26px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:22px; display:none; }
+  .statusRow { display:flex; justify-content:space-between; align-items:baseline; font-size:13.5px; font-weight:500; }
+  .statusRow .pct { color:var(--muted); }
+  .bar { height:4px; background:var(--bg); border-radius:2px; margin-top:10px; overflow:hidden; }
+  .bar div { height:100%; width:0; background:var(--ink); transition:width .3s; }
+
+  #transcriptPanel { display:none; margin-top:16px; }
+  #transcriptPanel .cap { font-size:11.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--faint); margin-bottom:6px; font-weight:600; }
+  #transcriptText { background:var(--bg); border:1px solid var(--line); border-radius:var(--r); padding:12px 14px; max-height:150px; overflow-y:auto; font-size:12.5px; color:var(--muted); white-space:pre-wrap; }
+
+  .note { background:var(--bg); border-left:3px solid var(--brand); border-radius:6px; padding:10px 12px; font-size:13px; margin:16px 0 0; }
+
+  /* Review blocks */
+  #reviewPanel { display:none; }
+  .rev-head { display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; font-size:12px; color:var(--muted); margin:16px 0 10px; }
+  #blocks { display:flex; flex-direction:column; gap:6px; max-height:330px; overflow-y:auto; }
+  .block { border:1px solid var(--line); border-radius:var(--r); padding:9px 12px; cursor:pointer; font-size:13.5px; line-height:1.55; }
+  .block .tc { font-family:"JetBrains Mono",monospace; font-size:10.5px; color:var(--faint); display:block; margin-bottom:2px; }
+  .block.keep { background:var(--keep-bg); border-color:#bbf7d0; }
+  .block.cut { background:var(--cut-bg); border-color:#fecaca; opacity:.6; }
+  .block.cut .txt { text-decoration:line-through; }
+  .block .w.edited { color:var(--brand); font-weight:600; }
+
+  /* Result */
+  #resultPanel { display:none; }
+  video#preview { width:100%; max-height:420px; background:#000; border-radius:10px; margin-top:16px; }
+  .versionRow { display:flex; gap:8px; align-items:center; margin-top:12px; flex-wrap:wrap; }
+  .vpill { padding:5px 12px; border-radius:99px; border:1px solid var(--line); background:var(--surface); font-size:12px; cursor:pointer; color:var(--muted); }
+  .vpill.on { background:var(--ink); color:#fff; border-color:var(--ink); }
+  .stats { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:14px; }
+  @media (max-width:640px){ .stats { grid-template-columns:1fr; } }
+  .stat { background:var(--bg); border-radius:var(--r); padding:12px; }
+  .stat .n { font-size:17px; font-weight:600; }
+  .stat .l { font-size:11.5px; color:var(--faint); margin-top:2px; }
+  .stat.saved .n { color:var(--keep); }
+
+  /* Timeline editor */
+  .tl-cap { display:flex; justify-content:space-between; align-items:baseline; margin:22px 0 8px; }
+  .tl-cap b { font-size:13px; font-weight:600; }
+  .tl-cap span { font-size:11.5px; color:var(--faint); }
+  #tlWrap { overflow-x:auto; padding-bottom:4px; }
+  #tl { display:flex; height:52px; min-width:560px; border-radius:8px; overflow:hidden; border:1px solid var(--line); }
+  #tl div { min-width:6px; cursor:pointer; position:relative; }
+  #tl div.keep { background:var(--ink); }
+  #tl div.cut { background:#ececec; }
+  #tl div.sel { outline:2px solid var(--brand); outline-offset:-2px; z-index:1; }
+  #inspector { display:none; margin-top:12px; border:1px solid var(--line); border-radius:var(--r); padding:14px; background:var(--bg); }
+  #inspector .txt { font-size:13.5px; margin:6px 0 12px; line-height:1.6; }
+  #inspector .tcline { font-family:"JetBrains Mono",monospace; font-size:11.5px; color:var(--muted); }
+  .nudges { display:flex; gap:16px; flex-wrap:wrap; align-items:center; }
+  .nud { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
+  .nud button { width:30px; height:30px; border:1px solid var(--line); background:var(--surface); border-radius:6px; cursor:pointer; font-size:14px; }
+  .nud button:active { background:var(--bg); }
+
+  .actions { display:flex; gap:10px; margin-top:20px; flex-wrap:wrap; }
+  .btn { padding:11px 20px; border-radius:var(--r); border:1px solid var(--line); background:var(--surface); font-weight:500; font-size:13.5px; cursor:pointer; text-decoration:none; color:var(--ink); display:inline-block; }
+  .btn.primary { background:var(--ink); color:#fff; border-color:var(--ink); }
+  .btn.primary:hover { opacity:.85; }
+  .btn.danger { color:var(--cut); }
+  .err { color:var(--cut); font-size:13px; margin-top:12px; }
+
+  footer { max-width:920px; margin:0 auto; padding:0 20px 40px; color:var(--faint); font-size:12px; }
+</style>
+</head>
+<body>
+<nav>
+  <div class="brand"><i></i>ClipSurgeon</div>
+  <div class="seg" role="tablist">
+    <button class="on" data-mode="ai" role="tab">AI edit</button>
+    <button data-mode="silence" role="tab">Quick cut</button>
+  </div>
+</nav>
+
+<main>
+  <section id="setup">
+    <h1>Raw footage in. Finished edit out.</h1>
+    <p class="sub">Describe the edit in plain English. Review the AI's plan, fix anything on the timeline, render as many versions as you need.</p>
+
+    <div id="drop" tabindex="0" role="button" aria-label="Upload a video">
+      <div class="big">Drop a video, or click to choose</div>
+      <div class="hint">mp4 · mov · mkv · webm — up to 2 GB, processed locally on your machine</div>
+      <input type="file" id="fileInput" accept="video/*" />
+    </div>
+
+    <div class="panel" id="aiPanel">
+      <div class="chips" id="presets">
+        <button class="chip" data-preset="youtube">YouTube</button>
+        <button class="chip" data-preset="shorts">Reels / Shorts</button>
+        <button class="chip" data-preset="podcast">Podcast clip</button>
+      </div>
+      <textarea id="instruction" placeholder="Tell the editor what you want… e.g. 'Cut the rambling, keep the strongest hook, end on the demo.'"></textarea>
+      <div class="grid3" style="margin-top:12px">
+        <div class="field">
+          <label>Target duration (sec)</label>
+          <input type="number" id="targetDuration" min="5" placeholder="auto" class="in" />
+        </div>
+        <div class="field">
+          <label>Captions</label>
+          <select id="captionStyle" class="in">
+            <option value="bold">Karaoke — word highlight</option>
+            <option value="clean">Clean — small, bottom</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Music (optional) <span class="val" id="musicVolVal">25%</span></label>
+          <input type="file" id="musicInput" accept="audio/*" class="in" style="margin-bottom:8px" />
+          <input type="range" id="musicVol" min="0.05" max="0.8" step="0.05" value="0.25" />
+        </div>
+      </div>
+      <div class="toggles">
+        <label class="tog"><input type="checkbox" id="captions" checked /> Burn in captions</label>
+        <label class="tog"><input type="checkbox" id="fillerRemoval" checked /> Cut filler words (um, uh)</label>
+        <label class="tog"><input type="checkbox" id="shrinkPauses" checked /> Shrink long pauses</label>
+        <label class="tog"><input type="checkbox" id="punchIn" checked /> Punch-in zooms on cuts</label>
+        <label class="tog"><input type="checkbox" id="vertical" /> Vertical 9:16</label>
+        <label class="tog"><input type="checkbox" id="review" checked /> Review plan before render</label>
+      </div>
+    </div>
+
+    <div class="panel grid3" id="silencePanel" style="display:none">
+      <div class="field">
+        <label>Silence threshold <span class="val" id="noiseVal">-35 dB</span></label>
+        <input type="range" id="noiseDb" min="-60" max="-15" value="-35" />
+      </div>
+      <div class="field">
+        <label>Min silence to cut <span class="val" id="minSilVal">0.6 s</span></label>
+        <input type="range" id="minSilence" min="0.2" max="3" step="0.1" value="0.6" />
+      </div>
+      <div class="field">
+        <label>Breathing room <span class="val" id="padVal">0.15 s</span></label>
+        <input type="range" id="padding" min="0" max="0.5" step="0.05" value="0.15" />
+      </div>
+    </div>
+  </section>
+
+  <section id="jobCard">
+    <div class="statusRow"><span id="statusText">Working…</span><span class="pct mono" id="pct">0%</span></div>
+    <div class="bar"><div id="barFill"></div></div>
+
+    <div id="transcriptPanel">
+      <div class="cap">What it heard</div>
+      <div id="transcriptText" class="mono"></div>
+    </div>
+
+    <div id="reviewPanel">
+      <p class="note" id="revSummary"></p>
+      <div class="rev-head">
+        <span>Click a block to keep or cut it · double-click a word to fix its caption</span>
+        <span class="mono" id="revStats"></span>
+      </div>
+      <div id="blocks"></div>
+      <div class="actions"><button class="btn primary" id="renderBtn">Render video</button></div>
+    </div>
+
+    <div id="resultPanel">
+      <p class="note" id="summary" style="display:none"></p>
+      <video id="preview" controls playsinline></video>
+      <div class="versionRow" id="versions"></div>
+      <div class="stats">
+        <div class="stat"><div class="n mono" id="origDur">–</div><div class="l">original</div></div>
+        <div class="stat"><div class="n mono" id="newDur">–</div><div class="l">this version</div></div>
+        <div class="stat saved"><div class="n mono" id="saved">–</div><div class="l">removed</div></div>
+      </div>
+
+      <div class="tl-cap"><b>Timeline</b><span>dark = kept · light = cut · tap a segment to adjust</span></div>
+      <div id="tlWrap"><div id="tl"></div></div>
+      <div id="inspector">
+        <div class="tcline" id="insTc"></div>
+        <div class="txt" id="insTxt"></div>
+        <div class="nudges">
+          <span class="nud">start <button data-n="s-">−</button><button data-n="s+">+</button></span>
+          <span class="nud">end <button data-n="e-">−</button><button data-n="e+">+</button></span>
+          <button class="btn" id="insToggle" style="padding:7px 14px">Toggle keep / cut</button>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn primary" id="rerenderBtn">Re-render with changes</button>
+        <a class="btn" id="download" href="#">Download</a>
+        <button class="btn" id="again">New video</button>
+      </div>
+    </div>
+
+    <div class="err" id="err"></div>
+  </section>
+</main>
+<footer>Runs entirely on your machine — video never leaves it except audio sent to Groq for transcription in AI mode.</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const drop = $("drop"), fileInput = $("fileInput");
+let mode = "ai", jobId = null, pollTimer = null;
+let wordEdits = {}, tlBlocks = [], selIdx = -1, jobDuration = 0, curVersion = 1;
+
+/* ---------- mode + presets + inputs ---------- */
+document.querySelectorAll(".seg button").forEach(b => b.onclick = () => {
+  mode = b.dataset.mode;
+  document.querySelectorAll(".seg button").forEach(x => x.classList.toggle("on", x === b));
+  $("aiPanel").style.display = mode === "ai" ? "block" : "none";
+  $("silencePanel").style.display = mode === "silence" ? "grid" : "none";
+});
+const PRESETS = {
+  youtube: { instruction: "Tighten this video: remove dead air, filler, false starts and rambling. Keep it engaging.", vertical:false, captionStyle:"clean", punchIn:false, targetDuration:"" },
+  shorts:  { instruction: "Cut this into a fast-paced short. Strongest hook first, keep only the best moments.", vertical:true, captionStyle:"bold", punchIn:true, targetDuration:"60" },
+  podcast: { instruction: "Pull the most engaging complete passage, like a podcast clip. One clear idea.", vertical:false, captionStyle:"bold", punchIn:false, targetDuration:"90" },
+};
+document.querySelectorAll("#presets .chip").forEach(c => c.onclick = () => {
+  const p = PRESETS[c.dataset.preset];
+  $("instruction").value = p.instruction;
+  $("vertical").checked = p.vertical;
+  $("captionStyle").value = p.captionStyle;
+  $("punchIn").checked = p.punchIn;
+  $("targetDuration").value = p.targetDuration;
+  document.querySelectorAll("#presets .chip").forEach(x => x.classList.toggle("on", x === c));
+});
+$("noiseDb").oninput = e => $("noiseVal").textContent = e.target.value + " dB";
+$("minSilence").oninput = e => $("minSilVal").textContent = e.target.value + " s";
+$("padding").oninput = e => $("padVal").textContent = e.target.value + " s";
+$("musicVol").oninput = e => $("musicVolVal").textContent = Math.round(e.target.value * 100) + "%";
+
+drop.onclick = () => fileInput.click();
+drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") fileInput.click(); };
+fileInput.onchange = () => fileInput.files[0] && start(fileInput.files[0]);
+["dragover","dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault();
+  drop.classList.toggle("over", ev === "dragover");
+  if (ev === "drop" && e.dataTransfer.files[0]) start(e.dataTransfer.files[0]);
+}));
+
+/* ---------- upload + poll ---------- */
+async function start(file) {
+  show("job"); hide("reviewPanel","resultPanel","transcriptPanel");
+  $("err").textContent = ""; wordEdits = {};
+  setStatus("Uploading " + file.name + "…", 2);
+
+  const form = new FormData();
+  form.append("video", file);
+  form.append("mode", mode);
+  ["noiseDb","minSilence","padding"].forEach(k => form.append(k, $(k).value));
+  if (mode === "ai") {
+    form.append("instruction", $("instruction").value);
+    if ($("targetDuration").value) form.append("targetDuration", $("targetDuration").value);
+    ["captions","fillerRemoval","shrinkPauses","punchIn","vertical","review"].forEach(k => form.append(k, $(k).checked));
+    form.append("captionStyle", $("captionStyle").value);
+    form.append("musicVol", $("musicVol").value);
+    if ($("musicInput").files[0]) form.append("music", $("musicInput").files[0]);
+  }
+  try {
+    const res = await fetch("/api/upload", { method:"POST", body:form });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Upload failed");
+    jobId = data.id;
+    poll();
+  } catch (e) { fail(e.message); }
+}
+
+function poll() {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const res = await fetch("/api/jobs/" + jobId);
+      const job = await res.json();
+      if (job.status === "error") { clearInterval(pollTimer); return fail(job.error); }
+      if (job.transcript) {
+        $("transcriptPanel").style.display = "block";
+        $("transcriptText").textContent = job.transcript;
+      }
+      if (job.status === "analyzing") setStatus("Analyzing…", 6);
+      if (job.status === "transcribing") setStatus("Transcribing with Whisper…", 18);
+      if (job.status === "planning") setStatus("AI is planning the edit…", 34);
+      if (job.status === "cutting") setStatus("Cutting & encoding…", 45 + (job.progress||0) * 0.45);
+      if (job.status === "finishing") setStatus("Captions & audio mix…", 93);
+      if (job.status === "review") { clearInterval(pollTimer); setStatus("Your review", 40); showReview(job); }
+      if (job.status === "done") { clearInterval(pollTimer); setStatus("Done", 100); showResult(job); }
+    } catch {}
+  }, 800);
+}
+
+/* ---------- review ---------- */
+function showReview(job) {
+  hide("resultPanel"); show("reviewPanel");
+  jobDuration = job.duration;
+  $("revSummary").textContent = job.summary ? "AI editor's plan: " + job.summary : "Review the planned cuts:";
+  const box = $("blocks"); box.innerHTML = "";
+  const blocks = job.reviewBlocks || [];
+  blocks.forEach(b => {
+    const div = document.createElement("div");
+    div.className = "block " + b.type;
+    const tc = el("span","tc", fmt(b.start) + " → " + fmt(b.end) + (b.type==="cut" ? "  (AI cut this)" : ""));
+    const txt = el("span","txt");
+    renderWords(txt, b.words);
+    div.append(tc, txt);
+    div.onclick = () => {
+      b.type = b.type === "keep" ? "cut" : "keep";
+      div.className = "block " + b.type;
+      tc.textContent = fmt(b.start) + " → " + fmt(b.end) + (b.type==="cut" ? "  (cut)" : "");
+      revStats(blocks);
+    };
+    box.appendChild(div);
+  });
+  revStats(blocks);
+  $("renderBtn").onclick = () => submitRender(blocks, "Rendering your approved edit…");
+}
+function revStats(blocks) {
+  const kept = blocks.filter(b=>b.type==="keep").reduce((s,b)=>s+(b.end-b.start),0);
+  $("revStats").textContent = "keeping " + fmt(kept) + " of " + fmt(jobDuration);
+}
+
+/* ---------- result + versions + timeline ---------- */
+function showResult(job) {
+  hide("reviewPanel","transcriptPanel"); show("resultPanel");
+  jobDuration = job.duration; curVersion = job.version || 1;
+  $("summary").style.display = job.summary ? "block" : "none";
+  $("summary").textContent = job.summary ? "Editor's note: " + job.summary : "";
+  $("origDur").textContent = fmt(job.duration);
+  $("newDur").textContent = fmt(job.keptDuration);
+  const saved = job.duration - job.keptDuration;
+  $("saved").textContent = "−" + fmt(saved) + " (" + Math.round(saved / job.duration * 100) + "%)";
+  renderVersions(job.versions || [{v:1, keptDuration: job.keptDuration}]);
+  setPreview(curVersion);
+  tlBlocks = (job.reviewBlocks || []).map(b => ({...b, words:[...(b.words||[])]}));
+  selIdx = -1; $("inspector").style.display = "none";
+  renderTl();
+  $("rerenderBtn").onclick = () => submitRender(tlBlocks, "Re-rendering with your timeline changes…");
+  $("again").onclick = () => { hide("job"); fileInput.value = ""; window.scrollTo({top:0,behavior:"smooth"}); };
+}
+function renderVersions(versions) {
+  const row = $("versions"); row.innerHTML = "";
+  versions.forEach(v => {
+    const b = el("button","vpill" + (v.v === curVersion ? " on" : ""), "v" + v.v + " · " + fmt(v.keptDuration));
+    b.onclick = () => {
+      curVersion = v.v;
+      row.querySelectorAll(".vpill").forEach(x => x.classList.remove("on"));
+      b.classList.add("on");
+      $("newDur").textContent = fmt(v.keptDuration);
+      const saved = jobDuration - v.keptDuration;
+      $("saved").textContent = "−" + fmt(saved) + " (" + Math.round(saved / jobDuration * 100) + "%)";
+      setPreview(v.v);
+    };
+    row.appendChild(b);
+  });
+}
+function setPreview(v) {
+  $("preview").src = "/api/preview/" + jobId + "?v=" + v + "&t=" + Date.now();
+  $("download").href = "/api/download/" + jobId + "?v=" + v;
+}
+function renderTl() {
+  const tl = $("tl"); tl.innerHTML = "";
+  tlBlocks.forEach((b, i) => {
+    const d = document.createElement("div");
+    d.className = b.type + (i === selIdx ? " sel" : "");
+    d.style.flexGrow = Math.max(b.end - b.start, 0.05);
+    d.title = fmt(b.start) + " → " + fmt(b.end);
+    d.onclick = () => { selIdx = i; renderTl(); renderInspector(); };
+    tl.appendChild(d);
+  });
+}
+function renderInspector() {
+  const b = tlBlocks[selIdx];
+  if (!b) return $("inspector").style.display = "none";
+  $("inspector").style.display = "block";
+  $("insTc").textContent = fmt(b.start) + " → " + fmt(b.end) + "  ·  " + (b.type === "keep" ? "KEPT" : "CUT");
+  const txt = $("insTxt"); txt.innerHTML = "";
+  renderWords(txt, b.words);
+  $("insToggle").onclick = () => { b.type = b.type === "keep" ? "cut" : "keep"; renderTl(); renderInspector(); };
+  document.querySelectorAll(".nud button").forEach(btn => btn.onclick = () => nudge(btn.dataset.n));
+}
+function nudge(op) {
+  const b = tlBlocks[selIdx]; if (!b) return;
+  const d = 0.1, MIN = 0.12;
+  const prev = tlBlocks[selIdx - 1], next = tlBlocks[selIdx + 1];
+  if (op === "s-" && prev && prev.end - prev.start - d >= MIN) { b.start -= d; prev.end -= d; }
+  if (op === "s+" && b.end - b.start - d >= MIN) { b.start += d; if (prev) prev.end += d; }
+  if (op === "e-" && b.end - b.start - d >= MIN) { b.end -= d; if (next) next.start -= d; }
+  if (op === "e+" && next && next.end - next.start - d >= MIN) { b.end += d; next.start += d; }
+  b.start = Math.max(0, b.start); b.end = Math.min(jobDuration, b.end);
+  renderTl(); renderInspector();
+}
+
+/* ---------- render submit ---------- */
+async function submitRender(blocks, msg) {
+  const included = blocks.filter(b => b.type === "keep").map(b => ({ start:b.start, end:b.end }));
+  if (!included.length) return fail("Nothing selected to keep.");
+  hide("reviewPanel","resultPanel");
+  setStatus(msg, 45);
+  const res = await fetch("/api/jobs/" + jobId + "/render", {
+    method:"POST", headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({ included, wordEdits }),
+  });
+  if (!res.ok) { const d = await res.json(); return fail(d.error || "Render failed"); }
+  poll();
+}
+
+/* ---------- helpers ---------- */
+function renderWords(container, words) {
+  if (!words || !words.length) { container.textContent = "(silence)"; return; }
+  words.forEach((w, k) => {
+    const s = el("span", "w" + (wordEdits[w.i] ? " edited" : ""), wordEdits[w.i] ?? w.w);
+    s.ondblclick = (e) => {
+      e.stopPropagation();
+      const nv = prompt("Fix this word:", wordEdits[w.i] ?? w.w);
+      if (nv !== null && nv.trim()) { wordEdits[w.i] = nv.trim(); s.textContent = nv.trim(); s.classList.add("edited"); }
+    };
+    container.appendChild(s);
+    if (k < words.length - 1) container.appendChild(document.createTextNode(" "));
+  });
+}
+function el(tag, cls, text) { const e = document.createElement(tag); e.className = cls; if (text != null) e.textContent = text; return e; }
+function show(...ids) { ids.forEach(i => $(i === "job" ? "jobCard" : i).style.display = "block"); }
+function hide(...ids) { ids.forEach(i => $(i === "job" ? "jobCard" : i).style.display = "none"); }
+function setStatus(t, p) { $("statusText").textContent = t; $("pct").textContent = Math.round(p) + "%"; $("barFill").style.width = p + "%"; }
+function fail(m) { $("err").textContent = m; setStatus("Failed", 0); }
+function fmt(s) { const m = Math.floor(s/60), sec = (s%60).toFixed(1).padStart(4,"0"); return m + ":" + sec; }
+</script>
+</body>
+</html>

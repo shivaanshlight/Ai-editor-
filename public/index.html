@@ -606,6 +606,91 @@
         margin-top: 12px;
       }
 
+      /* Clips */
+      #clipList {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 14px;
+        max-height: 380px;
+        overflow-y: auto;
+      }
+      .clipRow {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        border: 1px solid var(--line);
+        border-radius: var(--r);
+        padding: 12px;
+        background: var(--surface);
+        cursor: pointer;
+      }
+      .clipRow input {
+        margin-top: 3px;
+        accent-color: var(--ink);
+        width: 16px;
+        height: 16px;
+      }
+      .clipRow b {
+        font-size: 13.5px;
+        display: block;
+      }
+      .clipRow .meta {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10.5px;
+        color: var(--faint);
+        margin: 2px 0 4px;
+      }
+      .clipRow p {
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+      #clipGrid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+        gap: 14px;
+        margin-top: 16px;
+      }
+      .clipCard {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        overflow: hidden;
+        background: var(--surface);
+      }
+      .clipCard video {
+        width: 100%;
+        aspect-ratio: 9/16;
+        max-height: 340px;
+        background: #000;
+        display: block;
+      }
+      .clipCard.horiz video {
+        aspect-ratio: 16/9;
+        max-height: none;
+      }
+      .clipCard .pad {
+        padding: 10px 12px;
+      }
+      .clipCard b {
+        font-size: 13px;
+        display: block;
+      }
+      .clipCard .meta {
+        font-size: 11px;
+        color: var(--faint);
+        margin: 3px 0 8px;
+        font-family: "JetBrains Mono", monospace;
+      }
+      .clipCard a {
+        font-size: 12.5px;
+        font-weight: 500;
+        color: var(--ink);
+        text-decoration: none;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 6px 12px;
+        display: inline-block;
+      }
       footer {
         max-width: 920px;
         margin: 0 auto;
@@ -620,6 +705,7 @@
       <div class="brand"><i></i>ClipSurgeon</div>
       <div class="seg" role="tablist">
         <button class="on" data-mode="ai" role="tab">AI edit</button>
+        <button data-mode="clips" role="tab">Find clips</button>
         <button data-mode="silence" role="tab">Quick cut</button>
       </div>
     </nav>
@@ -715,7 +801,71 @@
               ><input type="checkbox" id="review" checked /> Review plan before
               render</label
             >
+            <label class="tog"
+              ><input type="checkbox" id="draft" checked /> Draft quality (fast
+              preview)</label
+            >
           </div>
+        </div>
+
+        <div class="panel" id="clipsPanel" style="display: none">
+          <textarea
+            id="clipInstruction"
+            placeholder="Optional: what should the clips be about? e.g. 'moments about money and career advice' — leave empty for the overall best moments."
+          ></textarea>
+          <div class="grid3" style="margin-top: 12px">
+            <div class="field">
+              <label>How many clips</label>
+              <select id="clipCount" class="in">
+                <option value="auto">Auto (best 3–8)</option>
+                <option value="3">3</option>
+                <option value="5">5</option>
+                <option value="8">8</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Clip length (approx)</label>
+              <select id="clipLen" class="in">
+                <option value="30">~30 s</option>
+                <option value="60" selected>~60 s</option>
+                <option value="90">~90 s</option>
+                <option value="120">~2 min</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Captions</label>
+              <select id="clipCaptionStyle" class="in">
+                <option value="bold">Karaoke — word highlight</option>
+                <option value="clean">Clean — small, bottom</option>
+              </select>
+            </div>
+          </div>
+          <div class="toggles">
+            <label class="tog"
+              ><input type="checkbox" id="clipCaptions" checked /> Burn in
+              captions</label
+            >
+            <label class="tog"
+              ><input type="checkbox" id="clipVertical" checked /> Vertical
+              9:16</label
+            >
+            <label class="tog"
+              ><input type="checkbox" id="clipPunchIn" checked /> Punch-in
+              zooms</label
+            >
+            <label class="tog"
+              ><input type="checkbox" id="clipReview" checked /> Choose clips
+              before render</label
+            >
+            <label class="tog"
+              ><input type="checkbox" id="clipDraft" checked /> Draft quality
+              (fast preview)</label
+            >
+          </div>
+          <p class="sub" style="font-size: 12.5px; margin-top: 10px">
+            Long videos welcome — audio is transcribed in 20-minute chunks, so
+            multi-hour podcasts work.
+          </p>
         </div>
 
         <div class="panel grid3" id="silencePanel" style="display: none">
@@ -780,6 +930,27 @@
           <div id="blocks"></div>
           <div class="actions">
             <button class="btn primary" id="renderBtn">Render video</button>
+          </div>
+        </div>
+
+        <div id="clipReviewPanel" style="display: none">
+          <p class="note">
+            Found these standalone moments. Untick any you don't want, then
+            render.
+          </p>
+          <div id="clipList"></div>
+          <div class="actions">
+            <button class="btn primary" id="renderClipsBtn">
+              Render selected clips
+            </button>
+          </div>
+        </div>
+
+        <div id="clipsResultPanel" style="display: none">
+          <p class="note" id="clipsDone"></p>
+          <div id="clipGrid"></div>
+          <div class="actions">
+            <button class="btn" id="againClips">New video</button>
           </div>
         </div>
 
@@ -868,6 +1039,7 @@
               .querySelectorAll(".seg button")
               .forEach((x) => x.classList.toggle("on", x === b));
             $("aiPanel").style.display = mode === "ai" ? "block" : "none";
+            $("clipsPanel").style.display = mode === "clips" ? "block" : "none";
             $("silencePanel").style.display =
               mode === "silence" ? "grid" : "none";
           }),
@@ -939,7 +1111,13 @@
       /* ---------- upload + poll ---------- */
       async function start(file) {
         show("job");
-        hide("reviewPanel", "resultPanel", "transcriptPanel");
+        hide(
+          "reviewPanel",
+          "resultPanel",
+          "transcriptPanel",
+          "clipReviewPanel",
+          "clipsResultPanel",
+        );
         $("err").textContent = "";
         wordEdits = {};
         setStatus("Uploading " + file.name + "…", 2);
@@ -950,6 +1128,17 @@
         ["noiseDb", "minSilence", "padding"].forEach((k) =>
           form.append(k, $(k).value),
         );
+        if (mode === "clips") {
+          form.append("instruction", $("clipInstruction").value);
+          form.append("clipCount", $("clipCount").value);
+          form.append("clipLen", $("clipLen").value);
+          form.append("captions", $("clipCaptions").checked);
+          form.append("captionStyle", $("clipCaptionStyle").value);
+          form.append("vertical", $("clipVertical").checked);
+          form.append("punchIn", $("clipPunchIn").checked);
+          form.append("review", $("clipReview").checked);
+          form.append("draft", $("clipDraft").checked);
+        }
         if (mode === "ai") {
           form.append("instruction", $("instruction").value);
           if ($("targetDuration").value)
@@ -961,6 +1150,7 @@
             "punchIn",
             "vertical",
             "review",
+            "draft",
           ].forEach((k) => form.append(k, $(k).checked));
           form.append("captionStyle", $("captionStyle").value);
           form.append("musicVol", $("musicVol").value);
@@ -995,13 +1185,20 @@
               $("transcriptPanel").style.display = "block";
               $("transcriptText").textContent = job.transcript;
             }
+            const st = job.stage ? " — " + job.stage : "";
             if (job.status === "analyzing") setStatus("Analyzing…", 6);
             if (job.status === "transcribing")
-              setStatus("Transcribing with Whisper…", 18);
+              setStatus(
+                "Transcribing" + (st || " with Whisper") + "…",
+                8 + (job.progress || 0) * 0.22,
+              );
             if (job.status === "planning")
               setStatus("AI is planning the edit…", 34);
             if (job.status === "cutting")
-              setStatus("Cutting & encoding…", 45 + (job.progress || 0) * 0.45);
+              setStatus(
+                "Cutting & encoding" + st + "…",
+                45 + (job.progress || 0) * 0.45,
+              );
             if (job.status === "finishing")
               setStatus("Captions & audio mix…", 93);
             if (job.status === "review") {
@@ -1009,10 +1206,16 @@
               setStatus("Your review", 40);
               showReview(job);
             }
+            if (job.status === "clipReview") {
+              clearInterval(pollTimer);
+              setStatus("Choose your clips", 40);
+              showClipReview(job);
+            }
             if (job.status === "done") {
               clearInterval(pollTimer);
               setStatus("Done", 100);
-              showResult(job);
+              if (job.clips && job.clips.length) showClipsResult(job);
+              else showResult(job);
             }
           } catch {}
         }, 800);
@@ -1414,6 +1617,99 @@
           return fail(d.error || "Render failed");
         }
         poll();
+      }
+
+      /* ---------- clips ---------- */
+      function showClipReview(job) {
+        hide("reviewPanel", "resultPanel", "transcriptPanel");
+        show("clipReviewPanel");
+        const list = $("clipList");
+        list.innerHTML = "";
+        (job.clipPlans || []).forEach((c) => {
+          const row = el("label", "clipRow");
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.checked = true;
+          cb.dataset.i = c.i;
+          const body = el("div", "");
+          const t = el("b", "", c.title);
+          const meta = el(
+            "div",
+            "meta",
+            fmt(c.start) +
+              " → " +
+              fmt(c.end) +
+              " · " +
+              Math.round(c.end - c.start) +
+              "s",
+          );
+          const p = el("p", "", (c.text || "") + "…");
+          body.append(t, meta, p);
+          row.append(cb, body);
+          list.appendChild(row);
+        });
+        $("renderClipsBtn").onclick = async () => {
+          const selected = [...list.querySelectorAll("input:checked")].map(
+            (x) => parseInt(x.dataset.i),
+          );
+          if (!selected.length) return fail("Select at least one clip.");
+          hide("clipReviewPanel");
+          setStatus("Rendering clips…", 45);
+          const res = await fetch("/api/jobs/" + jobId + "/render-clips", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ selected }),
+          });
+          if (!res.ok) {
+            const d = await res.json();
+            return fail(d.error || "Render failed");
+          }
+          poll();
+        };
+      }
+
+      function showClipsResult(job) {
+        hide(
+          "reviewPanel",
+          "resultPanel",
+          "transcriptPanel",
+          "clipReviewPanel",
+        );
+        show("clipsResultPanel");
+        $("clipsDone").textContent =
+          job.clips.length +
+          " clip" +
+          (job.clips.length > 1 ? "s" : "") +
+          " ready — preview and download below.";
+        const grid = $("clipGrid");
+        grid.innerHTML = "";
+        const horiz = mode === "clips" && !$("clipVertical").checked;
+        job.clips.forEach((c) => {
+          const card = el("div", "clipCard" + (horiz ? " horiz" : ""));
+          const v = document.createElement("video");
+          v.controls = true;
+          v.playsInline = true;
+          v.preload = "metadata";
+          v.src = "/api/preview/" + jobId + "?c=" + c.i + "&t=" + Date.now();
+          const pad = el("div", "pad");
+          const t = el("b", "", c.title);
+          const meta = el(
+            "div",
+            "meta",
+            Math.round(c.duration) + "s · from " + fmt(c.start),
+          );
+          const dl = document.createElement("a");
+          dl.href = "/api/download/" + jobId + "?c=" + c.i;
+          dl.textContent = "Download";
+          pad.append(t, meta, dl);
+          card.append(v, pad);
+          grid.appendChild(card);
+        });
+        $("againClips").onclick = () => {
+          hide("job");
+          fileInput.value = "";
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        };
       }
 
       /* ---------- helpers ---------- */

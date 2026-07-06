@@ -1,6 +1,6 @@
 /**
- * ClipSurgeon server — with human-in-the-loop review.
- * ai mode flow: transcribe → LLM plan → REVIEW (you approve/adjust) → render.
+ * ClipSurgeon server — AI edit, Find clips, Quick cut.
+ * Single-pass rendering: cut + captions + vertical + music in one encode.
  */
 const fs = require("fs");
 const path = require("path");
@@ -41,7 +41,7 @@ const {
   extractAudioChunked,
   buildSrt,
   buildAss,
-  finishPass,
+  CAPTION_STYLES,
 } = require("./lib/media");
 
 const app = express();
@@ -100,6 +100,7 @@ app.post(
         punchIn: b.punchIn === "true",
         vertical: b.vertical === "true",
         review: b.review !== "false",
+        draft: b.draft === "true",
         clipCount: b.clipCount || "auto",
         clipLen: [30, 60, 90, 120].includes(parseInt(b.clipLen))
           ? parseInt(b.clipLen)
@@ -199,81 +200,7 @@ function textInRange(words, start, end) {
     .join(" ");
 }
 
-/** Render each selected clip through the full polish pipeline. */
-async function renderClips(job, selectedIdx) {
-  const s = job.settings;
-  const { duration, fps, width, height } = job.meta;
-  job.clips = [];
-  const chosen = job.clipPlans.filter((c) => selectedIdx.includes(c.i));
-  if (!chosen.length) throw new Error("No clips selected.");
-
-  for (let k = 0; k < chosen.length; k++) {
-    const c = chosen[k];
-    job.status = "cutting";
-    job.stage = `clip ${k + 1} of ${chosen.length}: ${c.title}`;
-    job.progress = Math.round((k / chosen.length) * 100);
-
-    let segs = [{ start: c.start, end: c.end }];
-    if (s.fillerRemoval) segs = removeFillers(segs, job.words);
-    if (s.shrinkPauses) segs = shrinkPauses(segs, job.words);
-    segs = quantizeSegments(segs, fps, duration);
-    const clipDur = segs.reduce((sum, x) => sum + (x.end - x.start), 0);
-
-    const out = path.join(OUTPUT_DIR, `${job.id}.c${c.i}.mp4`);
-    const needsFinish = s.captions || s.vertical;
-    const cutTarget = needsFinish
-      ? path.join(OUTPUT_DIR, `${job.id}.c${c.i}.cut.mp4`)
-      : out;
-
-    await cutVideo(job.input, cutTarget, segs, null, {
-      punchIn: s.punchIn,
-      width,
-      height,
-    });
-
-    if (needsFinish) {
-      let srtFile = null,
-        assFile = null;
-      if (s.captions) {
-        if (s.captionStyle === "bold") {
-          const ass = buildAss(job.words, segs, { vertical: s.vertical });
-          if (ass) {
-            assFile = `${job.id}.c${c.i}.ass`;
-            fs.writeFileSync(path.join(OUTPUT_DIR, assFile), ass);
-          }
-        } else {
-          const srt = buildSrt(job.words, segs);
-          if (srt) {
-            srtFile = `${job.id}.c${c.i}.srt`;
-            fs.writeFileSync(path.join(OUTPUT_DIR, srtFile), srt);
-          }
-        }
-      }
-      await finishPass(cutTarget, out, {
-        srtFile,
-        assFile,
-        captionStyle: s.captionStyle,
-        musicPath: null,
-        vertical: s.vertical,
-      });
-      fs.unlink(cutTarget, () => {});
-      for (const f of [srtFile, assFile])
-        if (f) fs.unlink(path.join(OUTPUT_DIR, f), () => {});
-    }
-    job.clips.push({
-      i: c.i,
-      title: c.title,
-      duration: clipDur,
-      start: c.start,
-      end: c.end,
-    });
-  }
-  job.status = "done";
-  job.progress = 100;
-  job.stage = "";
-}
-
-/** Shared final pipeline: filler surgery → pause shrink → quantize → cut → captions/music. */
+/** Shared final pipeline: filler surgery → pause shrink → quantize → single-pass render. */
 async function renderJob(job, keeps) {
   const s = job.settings;
   const { duration, fps, width, height } = job.meta;
@@ -302,52 +229,39 @@ async function renderJob(job, keeps) {
   job.segments = keeps;
   job.keptDuration = keeps.reduce((sum, k) => sum + (k.end - k.start), 0);
 
-  const needsFinish =
-    job.mode === "ai" &&
-    ((s.captions && (job.srt || job.ass)) || s.musicPath || s.vertical);
-  const cutTarget = needsFinish
-    ? path.join(OUTPUT_DIR, job.id + ".cut.mp4")
-    : job.output;
-
   job.status = "cutting";
-  const wholeVideo =
-    keeps.length === 1 && keeps[0].start === 0 && keeps[0].end === duration;
-  if (wholeVideo) fs.copyFileSync(job.input, cutTarget);
-  else
-    await cutVideo(
-      job.input,
-      cutTarget,
-      keeps,
-      (sec) => {
-        job.progress = Math.min(99, Math.round((sec / job.keptDuration) * 100));
-      },
-      { punchIn: job.mode === "ai" && s.punchIn, width, height },
-    );
-
-  if (needsFinish) {
-    job.status = "finishing";
-    job.progress = 0;
-    let srtFile = null,
-      assFile = null;
-    if (s.captions && job.ass) {
-      assFile = job.id + ".ass";
-      fs.writeFileSync(path.join(OUTPUT_DIR, assFile), job.ass);
-    } else if (s.captions && job.srt) {
-      srtFile = job.id + ".srt";
-      fs.writeFileSync(path.join(OUTPUT_DIR, srtFile), job.srt);
+  let subFile = null;
+  if (job.mode === "ai" && s.captions) {
+    if (job.ass) {
+      subFile = `${job.id}.v${job.version}.ass`;
+      fs.writeFileSync(path.join(OUTPUT_DIR, subFile), job.ass);
+    } else if (job.srt) {
+      subFile = `${job.id}.v${job.version}.srt`;
+      fs.writeFileSync(path.join(OUTPUT_DIR, subFile), job.srt);
     }
-    await finishPass(cutTarget, job.output, {
-      srtFile,
-      assFile,
-      captionStyle: s.captionStyle,
-      musicPath: s.musicPath ? path.resolve(s.musicPath) : null,
-      musicVol: s.musicVol,
-      vertical: s.vertical,
-    });
-    fs.unlink(cutTarget, () => {});
-    for (const f of [srtFile, assFile])
-      if (f) fs.unlink(path.join(OUTPUT_DIR, f), () => {});
   }
+  await cutVideo(
+    path.resolve(job.input),
+    path.basename(job.output),
+    keeps,
+    (sec) => {
+      job.progress = Math.min(99, Math.round((sec / job.keptDuration) * 100));
+    },
+    {
+      punchIn: job.mode === "ai" && s.punchIn,
+      width,
+      height,
+      draft: s.draft,
+      subFile,
+      subStyle: s.captionStyle === "clean" ? CAPTION_STYLES.clean : null,
+      vertical: job.mode === "ai" && s.vertical,
+      musicPath:
+        job.mode === "ai" && s.musicPath ? path.resolve(s.musicPath) : null,
+      musicVol: s.musicVol,
+      cwd: OUTPUT_DIR,
+    },
+  );
+  if (subFile) fs.unlink(path.join(OUTPUT_DIR, subFile), () => {});
 
   job.status = "done";
   job.progress = 100;
@@ -360,6 +274,67 @@ async function renderJob(job, keeps) {
   });
   // Source and music are kept so the timeline editor can re-render; boot cleanup
   // clears them when the server restarts.
+}
+
+/** Render each selected clip through the full polish pipeline. */
+async function renderClips(job, selectedIdx) {
+  const s = job.settings;
+  const { duration, fps, width, height } = job.meta;
+  job.clips = [];
+  const chosen = job.clipPlans.filter((c) => selectedIdx.includes(c.i));
+  if (!chosen.length) throw new Error("No clips selected.");
+
+  for (let k = 0; k < chosen.length; k++) {
+    const c = chosen[k];
+    job.status = "cutting";
+    job.stage = `clip ${k + 1} of ${chosen.length}: ${c.title}`;
+    job.progress = Math.round((k / chosen.length) * 100);
+
+    let segs = [{ start: c.start, end: c.end }];
+    if (s.fillerRemoval) segs = removeFillers(segs, job.words);
+    if (s.shrinkPauses) segs = shrinkPauses(segs, job.words);
+    segs = quantizeSegments(segs, fps, duration);
+    const clipDur = segs.reduce((sum, x) => sum + (x.end - x.start), 0);
+
+    const out = path.join(OUTPUT_DIR, `${job.id}.c${c.i}.mp4`);
+    let subFile = null;
+    if (s.captions) {
+      if (s.captionStyle === "bold") {
+        const ass = buildAss(job.words, segs, { vertical: s.vertical });
+        if (ass) {
+          subFile = `${job.id}.c${c.i}.ass`;
+          fs.writeFileSync(path.join(OUTPUT_DIR, subFile), ass);
+        }
+      } else {
+        const srt = buildSrt(job.words, segs);
+        if (srt) {
+          subFile = `${job.id}.c${c.i}.srt`;
+          fs.writeFileSync(path.join(OUTPUT_DIR, subFile), srt);
+        }
+      }
+    }
+    await cutVideo(path.resolve(job.input), path.basename(out), segs, null, {
+      punchIn: s.punchIn,
+      width,
+      height,
+      draft: s.draft,
+      subFile,
+      subStyle: s.captionStyle === "clean" ? CAPTION_STYLES.clean : null,
+      vertical: s.vertical,
+      cwd: OUTPUT_DIR,
+    });
+    if (subFile) fs.unlink(path.join(OUTPUT_DIR, subFile), () => {});
+    job.clips.push({
+      i: c.i,
+      title: c.title,
+      duration: clipDur,
+      start: c.start,
+      end: c.end,
+    });
+  }
+  job.status = "done";
+  job.progress = 100;
+  job.stage = "";
 }
 
 /**

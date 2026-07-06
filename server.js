@@ -1,6 +1,6 @@
 /**
- * ClipSurgeon server — AI edit, Find clips, Quick cut.
- * Single-pass rendering: cut + captions + vertical + music in one encode.
+ * ClipSurgeon server — with human-in-the-loop review.
+ * ai mode flow: transcribe → LLM plan → REVIEW (you approve/adjust) → render.
  */
 const fs = require("fs");
 const path = require("path");
@@ -27,7 +27,6 @@ const {
   cutVideo,
 } = require("./lib/silence");
 const {
-  transcribe,
   transcribeLong,
   planEdit,
   findClips,
@@ -35,6 +34,7 @@ const {
   validateEdl,
   removeFillers,
   shrinkPauses,
+  detectChapters,
 } = require("./lib/ai");
 const {
   extractAudio,
@@ -49,16 +49,120 @@ const PORT = process.env.PORT || 3000;
 
 const UPLOAD_DIR = path.join(__dirname, "uploads");
 const OUTPUT_DIR = path.join(__dirname, "outputs");
-for (const d of [UPLOAD_DIR, OUTPUT_DIR]) fs.mkdirSync(d, { recursive: true });
-// Jobs don't survive restarts, so stale uploads are orphans — clear them at boot.
-for (const f of fs.readdirSync(UPLOAD_DIR))
-  fs.unlink(path.join(UPLOAD_DIR, f), () => {});
+const DATA_DIR = path.join(__dirname, "data");
+const JOBS_DIR = path.join(DATA_DIR, "jobs");
+const CACHE_DIR = path.join(DATA_DIR, "transcripts");
+for (const d of [UPLOAD_DIR, OUTPUT_DIR, JOBS_DIR, CACHE_DIR])
+  fs.mkdirSync(d, { recursive: true });
 
 const upload = multer({
   dest: UPLOAD_DIR,
   limits: { fileSize: 2 * 1024 * 1024 * 1024 },
 });
 const jobs = new Map();
+
+/* ---------- persistence: every job survives a restart ---------- */
+function saveJob(job) {
+  try {
+    const { _timer, ...clean } = job;
+    fs.writeFile(
+      path.join(JOBS_DIR, job.id + ".json"),
+      JSON.stringify(clean),
+      () => {},
+    );
+  } catch {}
+}
+
+// Load persisted jobs at boot. Jobs interrupted mid-processing fall back to
+// their last human-facing checkpoint (review / clip selection) when possible.
+for (const f of fs.readdirSync(JOBS_DIR)) {
+  try {
+    const job = JSON.parse(fs.readFileSync(path.join(JOBS_DIR, f), "utf8"));
+    const active = [
+      "analyzing",
+      "transcribing",
+      "planning",
+      "cutting",
+      "finishing",
+      "queued",
+    ];
+    if (active.includes(job.status)) {
+      if (job.reviewBlocks && job.plannedKeeps) job.status = "review";
+      else if (job.clipPlans) job.status = "clipReview";
+      else {
+        job.status = "error";
+        job.error = "Interrupted by a server restart — upload again.";
+      }
+    }
+    if (job.status === "done") {
+      const latest = path.join(
+        OUTPUT_DIR,
+        `${job.id}.${job.clips?.length ? "c" + job.clips[0].i : "v" + (job.version || 1)}.mp4`,
+      );
+      if (!fs.existsSync(latest)) {
+        job.status = "error";
+        job.error = "Output files were removed.";
+      }
+    }
+    jobs.set(job.id, job);
+  } catch {}
+}
+// Clean only upload files no persisted job still references.
+{
+  const referenced = new Set();
+  for (const j of jobs.values()) {
+    if (j.input) referenced.add(path.basename(j.input));
+    if (j.settings?.musicPath)
+      referenced.add(path.basename(j.settings.musicPath));
+  }
+  for (const f of fs.readdirSync(UPLOAD_DIR))
+    if (!referenced.has(f)) fs.unlink(path.join(UPLOAD_DIR, f), () => {});
+}
+
+/* ---------- render queue: one encode at a time, everything else waits ---------- */
+const renderQueue = [];
+let rendering = null;
+function enqueueRender(job, fn) {
+  job.status = "queued";
+  saveJob(job);
+  renderQueue.push({ job, fn });
+  pumpQueue();
+}
+async function pumpQueue() {
+  if (rendering || !renderQueue.length) return;
+  const task = renderQueue.shift();
+  rendering = task;
+  try {
+    await task.fn();
+  } catch (err) {
+    task.job.status = "error";
+    task.job.error = err.message;
+  } finally {
+    saveJob(task.job);
+    rendering = null;
+    pumpQueue();
+  }
+}
+function queuePosition(job) {
+  const i = renderQueue.findIndex((t) => t.job.id === job.id);
+  return i === -1 ? 0 : i + 1 + (rendering ? 1 : 0);
+}
+
+/* ---------- transcript cache: same file never transcribed twice ---------- */
+async function fileFingerprint(file, duration) {
+  const stat = fs.statSync(file);
+  const fd = fs.openSync(file, "r");
+  const buf = Buffer.alloc(Math.min(4 * 1024 * 1024, stat.size));
+  fs.readSync(fd, buf, 0, buf.length, 0);
+  fs.closeSync(fd);
+  return crypto
+    .createHash("sha256")
+    .update(buf)
+    .update(String(stat.size))
+    .update(String(Math.round(duration)))
+    .digest("hex")
+    .slice(0, 32);
+}
 
 app.use(express.static(path.join(__dirname, "public")));
 app.use(express.json({ limit: "10mb" }));
@@ -111,9 +215,11 @@ app.post(
       createdAt: Date.now(),
     };
     jobs.set(id, job);
+    saveJob(job);
     processJob(job).catch((err) => {
       job.status = "error";
       job.error = err.message;
+      saveJob(job);
     });
     res.json({ id });
   },
@@ -131,22 +237,44 @@ async function processJob(job) {
       padding: s.padding,
     });
     if (!silences.length) keeps = [{ start: 0, end: meta.duration }];
-    return renderJob(job, keeps);
+    return enqueueRender(job, () => renderJob(job, keeps));
   }
 
-  // ---- AI + Clips modes: chunked transcription works for any length ----
+  // ---- AI + Clips modes: chunked transcription with a fingerprint cache ----
   job.status = "transcribing";
-  const chunks = await extractAudioChunked(job.input, job.input, meta.duration);
-  const transcript = await transcribeLong(chunks, (i, n) => {
-    job.progress = Math.round((i / n) * 100);
-    job.stage = n > 1 ? `chunk ${i + 1} of ${n}` : "";
-  });
-  for (const c of chunks) fs.unlink(c.path, () => {});
+  saveJob(job);
+  const fp = await fileFingerprint(job.input, meta.duration);
+  const cacheFile = path.join(CACHE_DIR, fp + ".json");
+  let transcript;
+  if (fs.existsSync(cacheFile)) {
+    transcript = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
+    job.stage = "cached — skipped transcription";
+  } else {
+    const chunks = await extractAudioChunked(
+      job.input,
+      job.input,
+      meta.duration,
+    );
+    transcript = await transcribeLong(chunks, (i, n) => {
+      job.progress = Math.round((i / n) * 100);
+      job.stage = n > 1 ? `chunk ${i + 1} of ${n}` : "";
+    });
+    for (const c of chunks) fs.unlink(c.path, () => {});
+    fs.writeFile(cacheFile, JSON.stringify(transcript), () => {});
+  }
   job.words = transcript.words || [];
   job.transcriptText = transcript.text || "";
   job.progress = 0;
 
+  // Chapters are a bonus, never a blocker.
+  try {
+    job.chapters = await detectChapters(transcript, meta.duration);
+  } catch {
+    job.chapters = [];
+  }
+
   job.status = "planning";
+  saveJob(job);
 
   if (job.mode === "clips") {
     const minLen = Math.round(s.clipLen * 0.6),
@@ -166,11 +294,14 @@ async function processJob(job) {
     }));
     if (s.review) {
       job.status = "clipReview";
+      saveJob(job);
       return;
     }
-    return renderClips(
-      job,
-      job.clipPlans.map((c) => c.i),
+    return enqueueRender(job, () =>
+      renderClips(
+        job,
+        job.clipPlans.map((c) => c.i),
+      ),
     );
   }
 
@@ -188,9 +319,10 @@ async function processJob(job) {
     job.plannedKeeps = keeps;
     job.reviewBlocks = buildBlocks(keeps, job.words, meta.duration);
     job.status = "review";
+    saveJob(job);
     return;
   }
-  return renderJob(job, keeps);
+  return enqueueRender(job, () => renderJob(job, keeps));
 }
 
 function textInRange(words, start, end) {
@@ -200,7 +332,69 @@ function textInRange(words, start, end) {
     .join(" ");
 }
 
-/** Shared final pipeline: filler surgery → pause shrink → quantize → single-pass render. */
+/** Render each selected clip through the full polish pipeline. */
+async function renderClips(job, selectedIdx) {
+  const s = job.settings;
+  const { duration, fps, width, height } = job.meta;
+  job.clips = [];
+  const chosen = job.clipPlans.filter((c) => selectedIdx.includes(c.i));
+  if (!chosen.length) throw new Error("No clips selected.");
+
+  for (let k = 0; k < chosen.length; k++) {
+    const c = chosen[k];
+    job.status = "cutting";
+    job.stage = `clip ${k + 1} of ${chosen.length}: ${c.title}`;
+    job.progress = Math.round((k / chosen.length) * 100);
+
+    let segs = [{ start: c.start, end: c.end }];
+    if (s.fillerRemoval) segs = removeFillers(segs, job.words);
+    if (s.shrinkPauses) segs = shrinkPauses(segs, job.words);
+    segs = quantizeSegments(segs, fps, duration);
+    const clipDur = segs.reduce((sum, x) => sum + (x.end - x.start), 0);
+
+    const out = path.join(OUTPUT_DIR, `${job.id}.c${c.i}.mp4`);
+    let subFile = null;
+    if (s.captions) {
+      if (s.captionStyle === "bold") {
+        const ass = buildAss(job.words, segs, { vertical: s.vertical });
+        if (ass) {
+          subFile = `${job.id}.c${c.i}.ass`;
+          fs.writeFileSync(path.join(OUTPUT_DIR, subFile), ass);
+        }
+      } else {
+        const srt = buildSrt(job.words, segs);
+        if (srt) {
+          subFile = `${job.id}.c${c.i}.srt`;
+          fs.writeFileSync(path.join(OUTPUT_DIR, subFile), srt);
+        }
+      }
+    }
+    await cutVideo(path.resolve(job.input), path.basename(out), segs, null, {
+      punchIn: s.punchIn,
+      width,
+      height,
+      draft: s.draft,
+      subFile,
+      subStyle: s.captionStyle === "clean" ? CAPTION_STYLES.clean : null,
+      vertical: s.vertical,
+      cwd: OUTPUT_DIR,
+    });
+    if (subFile) fs.unlink(path.join(OUTPUT_DIR, subFile), () => {});
+    job.clips.push({
+      i: c.i,
+      title: c.title,
+      duration: clipDur,
+      start: c.start,
+      end: c.end,
+    });
+  }
+  job.status = "done";
+  job.progress = 100;
+  job.stage = "";
+  saveJob(job);
+}
+
+/** Shared final pipeline: filler surgery → pause shrink → quantize → cut → captions/music. */
 async function renderJob(job, keeps) {
   const s = job.settings;
   const { duration, fps, width, height } = job.meta;
@@ -272,69 +466,9 @@ async function renderJob(job, keeps) {
     segments: keeps,
     createdAt: Date.now(),
   });
+  saveJob(job);
   // Source and music are kept so the timeline editor can re-render; boot cleanup
   // clears them when the server restarts.
-}
-
-/** Render each selected clip through the full polish pipeline. */
-async function renderClips(job, selectedIdx) {
-  const s = job.settings;
-  const { duration, fps, width, height } = job.meta;
-  job.clips = [];
-  const chosen = job.clipPlans.filter((c) => selectedIdx.includes(c.i));
-  if (!chosen.length) throw new Error("No clips selected.");
-
-  for (let k = 0; k < chosen.length; k++) {
-    const c = chosen[k];
-    job.status = "cutting";
-    job.stage = `clip ${k + 1} of ${chosen.length}: ${c.title}`;
-    job.progress = Math.round((k / chosen.length) * 100);
-
-    let segs = [{ start: c.start, end: c.end }];
-    if (s.fillerRemoval) segs = removeFillers(segs, job.words);
-    if (s.shrinkPauses) segs = shrinkPauses(segs, job.words);
-    segs = quantizeSegments(segs, fps, duration);
-    const clipDur = segs.reduce((sum, x) => sum + (x.end - x.start), 0);
-
-    const out = path.join(OUTPUT_DIR, `${job.id}.c${c.i}.mp4`);
-    let subFile = null;
-    if (s.captions) {
-      if (s.captionStyle === "bold") {
-        const ass = buildAss(job.words, segs, { vertical: s.vertical });
-        if (ass) {
-          subFile = `${job.id}.c${c.i}.ass`;
-          fs.writeFileSync(path.join(OUTPUT_DIR, subFile), ass);
-        }
-      } else {
-        const srt = buildSrt(job.words, segs);
-        if (srt) {
-          subFile = `${job.id}.c${c.i}.srt`;
-          fs.writeFileSync(path.join(OUTPUT_DIR, subFile), srt);
-        }
-      }
-    }
-    await cutVideo(path.resolve(job.input), path.basename(out), segs, null, {
-      punchIn: s.punchIn,
-      width,
-      height,
-      draft: s.draft,
-      subFile,
-      subStyle: s.captionStyle === "clean" ? CAPTION_STYLES.clean : null,
-      vertical: s.vertical,
-      cwd: OUTPUT_DIR,
-    });
-    if (subFile) fs.unlink(path.join(OUTPUT_DIR, subFile), () => {});
-    job.clips.push({
-      i: c.i,
-      title: c.title,
-      duration: clipDur,
-      start: c.start,
-      end: c.end,
-    });
-  }
-  job.status = "done";
-  job.progress = 100;
-  job.stage = "";
 }
 
 /**
@@ -404,12 +538,8 @@ app.post("/api/jobs/:id/render", (req, res) => {
       job.words[idx].word = text;
   }
 
-  job.status = "cutting";
   job.progress = 0;
-  renderJob(job, keeps).catch((err) => {
-    job.status = "error";
-    job.error = err.message;
-  });
+  enqueueRender(job, () => renderJob(job, keeps));
   res.json({ ok: true });
 });
 
@@ -425,12 +555,8 @@ app.post("/api/jobs/:id/render-clips", (req, res) => {
     : [];
   if (!sel.length)
     return res.status(400).json({ error: "Select at least one clip." });
-  job.status = "cutting";
   job.progress = 0;
-  renderClips(job, sel).catch((err) => {
-    job.status = "error";
-    job.error = err.message;
-  });
+  enqueueRender(job, () => renderClips(job, sel));
   res.json({ ok: true });
 });
 
@@ -472,7 +598,37 @@ app.get("/api/jobs/:id", (req, res) => {
   if (job.stage) payload.stage = job.stage;
   if (status === "clipReview") payload.clipPlans = job.clipPlans;
   if (job.clips) payload.clips = job.clips;
+  if (job.chapters?.length) payload.chapters = job.chapters;
+  if (status === "queued") payload.queuePos = queuePosition(job);
   res.json(payload);
+});
+
+/** Recent projects (persistence makes this meaningful). */
+app.get("/api/jobs", (req, res) => {
+  const list = [...jobs.values()]
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, 12)
+    .map((j) => ({
+      id: j.id,
+      name: j.originalName,
+      mode: j.mode,
+      status: j.status,
+      createdAt: j.createdAt,
+    }));
+  res.json(list);
+});
+
+/** Full word list for transcript search (word + start time only). */
+app.get("/api/jobs/:id/words", (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job || !job.words)
+    return res.status(404).json({ error: "No transcript." });
+  res.json(
+    job.words.map((w) => ({
+      w: w.word.trim(),
+      s: Math.round(w.start * 10) / 10,
+    })),
+  );
 });
 
 app.get("/api/preview/:id", (req, res) => {

@@ -43,17 +43,16 @@ const {
   buildAss,
   CAPTION_STYLES,
 } = require("./lib/media");
+const store = require("./lib/supabase");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Local dirs are now just scratch space for ffmpeg; the durable copies of the
+// source and every output live in Supabase Storage.
 const UPLOAD_DIR = path.join(__dirname, "uploads");
 const OUTPUT_DIR = path.join(__dirname, "outputs");
-const DATA_DIR = path.join(__dirname, "data");
-const JOBS_DIR = path.join(DATA_DIR, "jobs");
-const CACHE_DIR = path.join(DATA_DIR, "transcripts");
-for (const d of [UPLOAD_DIR, OUTPUT_DIR, JOBS_DIR, CACHE_DIR])
-  fs.mkdirSync(d, { recursive: true });
+for (const d of [UPLOAD_DIR, OUTPUT_DIR]) fs.mkdirSync(d, { recursive: true });
 
 const upload = multer({
   dest: UPLOAD_DIR,
@@ -61,31 +60,25 @@ const upload = multer({
 });
 const jobs = new Map();
 
-/* ---------- persistence: every job survives a restart ---------- */
+/* ---------- persistence: Supabase (jobs survive a restart) ---------- */
 function saveJob(job) {
-  try {
-    const { _timer, ...clean } = job;
-    fs.writeFile(
-      path.join(JOBS_DIR, job.id + ".json"),
-      JSON.stringify(clean),
-      () => {},
-    );
-  } catch {}
+  // Fire-and-forget upsert; matches the old async-write behavior.
+  store.saveJob(job).catch((e) => console.error("saveJob:", e.message));
 }
 
-// Load persisted jobs at boot. Jobs interrupted mid-processing fall back to
-// their last human-facing checkpoint (review / clip selection) when possible.
-for (const f of fs.readdirSync(JOBS_DIR)) {
-  try {
-    const job = JSON.parse(fs.readFileSync(path.join(JOBS_DIR, f), "utf8"));
-    const active = [
-      "analyzing",
-      "transcribing",
-      "planning",
-      "cutting",
-      "finishing",
-      "queued",
-    ];
+// Load recent jobs at boot. Jobs interrupted mid-processing fall back to their
+// last human-facing checkpoint (review / clip selection) when possible.
+async function loadPersistedJobs() {
+  const list = await store.loadJobs(200);
+  const active = [
+    "analyzing",
+    "transcribing",
+    "planning",
+    "cutting",
+    "finishing",
+    "queued",
+  ];
+  for (const job of list) {
     if (active.includes(job.status)) {
       if (job.reviewBlocks && job.plannedKeeps) job.status = "review";
       else if (job.clipPlans) job.status = "clipReview";
@@ -94,29 +87,55 @@ for (const f of fs.readdirSync(JOBS_DIR)) {
         job.error = "Interrupted by a server restart — upload again.";
       }
     }
-    if (job.status === "done") {
-      const latest = path.join(
-        OUTPUT_DIR,
-        `${job.id}.${job.clips?.length ? "c" + job.clips[0].i : "v" + (job.version || 1)}.mp4`,
-      );
-      if (!fs.existsSync(latest)) {
-        job.status = "error";
-        job.error = "Output files were removed.";
-      }
-    }
+    delete job.input; // local scratch path from a previous run; re-fetch on demand
     jobs.set(job.id, job);
-  } catch {}
-}
-// Clean only upload files no persisted job still references.
-{
-  const referenced = new Set();
-  for (const j of jobs.values()) {
-    if (j.input) referenced.add(path.basename(j.input));
-    if (j.settings?.musicPath)
-      referenced.add(path.basename(j.settings.musicPath));
   }
-  for (const f of fs.readdirSync(UPLOAD_DIR))
-    if (!referenced.has(f)) fs.unlink(path.join(UPLOAD_DIR, f), () => {});
+  console.log(`Loaded ${jobs.size} job(s) from Supabase.`);
+}
+
+/* ---------- Storage bridges: keep a local copy for ffmpeg ---------- */
+
+/** Make sure the source video exists locally, pulling it from Storage if needed. */
+async function ensureLocalSource(job) {
+  if (job.input && fs.existsSync(job.input)) return job.input;
+  if (!job.source_path)
+    throw new Error("Source video is no longer available — upload again.");
+  const ext = path.extname(job.source_path) || ".mp4";
+  const dest = path.join(UPLOAD_DIR, `${job.id}.src${ext}`);
+  await store.downloadTo("source", job.source_path, dest);
+  job.input = dest;
+  return dest;
+}
+
+/** Push the freshly uploaded source into Storage once, so it survives restarts. */
+async function ensureSourceUploaded(job) {
+  if (job.source_path) return;
+  const ext = path.extname(job.originalName || "") || ".mp4";
+  const k = store.key(job.id, `source${ext}`);
+  await store.uploadLocal("source", k, job.input, "video/mp4");
+  job.source_path = k;
+  saveJob(job);
+}
+
+/** Lazily attach the transcript's words (kept in the transcripts table). */
+async function ensureWords(job) {
+  if (job.words && job.words.length) return;
+  if (job.transcript_fp) {
+    const t = await store.getTranscript(job.transcript_fp);
+    if (t) {
+      job.words = t.words || [];
+      job.transcriptText = t.text || "";
+      return;
+    }
+  }
+  job.words = job.words || [];
+}
+
+/** Upload a rendered file to the outputs bucket and return its storage key. */
+async function uploadOutput(job, localPath, name) {
+  const k = store.key(job.id, name);
+  await store.uploadLocal("outputs", k, localPath, "video/mp4");
+  return k;
 }
 
 /* ---------- render queue: one encode at a time, everything else waits ---------- */
@@ -227,6 +246,8 @@ app.post(
 
 async function processJob(job) {
   const s = job.settings;
+  await ensureLocalSource(job);
+  await ensureSourceUploaded(job);
   const meta = await probe(job.input);
   job.meta = meta;
   job.duration = meta.duration;
@@ -244,10 +265,9 @@ async function processJob(job) {
   job.status = "transcribing";
   saveJob(job);
   const fp = await fileFingerprint(job.input, meta.duration);
-  const cacheFile = path.join(CACHE_DIR, fp + ".json");
-  let transcript;
-  if (fs.existsSync(cacheFile)) {
-    transcript = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
+  job.transcript_fp = fp;
+  let transcript = await store.getTranscript(fp);
+  if (transcript) {
     job.stage = "cached — skipped transcription";
   } else {
     const chunks = await extractAudioChunked(
@@ -260,7 +280,7 @@ async function processJob(job) {
       job.stage = n > 1 ? `chunk ${i + 1} of ${n}` : "";
     });
     for (const c of chunks) fs.unlink(c.path, () => {});
-    fs.writeFile(cacheFile, JSON.stringify(transcript), () => {});
+    await store.saveTranscript(fp, transcript);
   }
   job.words = transcript.words || [];
   job.transcriptText = transcript.text || "";
@@ -338,6 +358,8 @@ function textInRange(words, start, end) {
 /** Render each selected clip through the full polish pipeline. */
 async function renderClips(job, selectedIdx) {
   const s = job.settings;
+  await ensureLocalSource(job);
+  await ensureWords(job);
   const { duration, fps, width, height } = job.meta;
   job.clips = [];
   const chosen = job.clipPlans.filter((c) => selectedIdx.includes(c.i));
@@ -383,12 +405,15 @@ async function renderClips(job, selectedIdx) {
       cwd: OUTPUT_DIR,
     });
     if (subFile) fs.unlink(path.join(OUTPUT_DIR, subFile), () => {});
+    const outPath = await uploadOutput(job, out, `c${c.i}.mp4`);
+    fs.unlink(out, () => {});
     job.clips.push({
       i: c.i,
       title: c.title,
       duration: clipDur,
       start: c.start,
       end: c.end,
+      output_path: outPath,
     });
   }
   job.status = "done";
@@ -400,6 +425,8 @@ async function renderClips(job, selectedIdx) {
 /** Shared final pipeline: filler surgery → pause shrink → quantize → cut → captions/music. */
 async function renderJob(job, keeps) {
   const s = job.settings;
+  await ensureLocalSource(job);
+  await ensureWords(job);
   const { duration, fps, width, height } = job.meta;
 
   // Remember the human-approved cut list (pre filler/pause/quantize) so the
@@ -460,6 +487,9 @@ async function renderJob(job, keeps) {
   );
   if (subFile) fs.unlink(path.join(OUTPUT_DIR, subFile), () => {});
 
+  const outPath = await uploadOutput(job, job.output, `v${job.version}.mp4`);
+  fs.unlink(job.output, () => {});
+
   job.status = "done";
   job.progress = 100;
   job.versions = job.versions || [];
@@ -467,11 +497,10 @@ async function renderJob(job, keeps) {
     v: job.version,
     keptDuration: job.keptDuration,
     segments: keeps,
+    output_path: outPath,
     createdAt: Date.now(),
   });
   saveJob(job);
-  // Source and music are kept so the timeline editor can re-render; boot cleanup
-  // clears them when the server restarts.
 }
 
 /* ------------------------------------------------------------------ *
@@ -687,7 +716,7 @@ function sanitizeSegments(list, duration) {
 }
 
 /** The human approved (and possibly adjusted) the plan — render it. */
-app.post("/api/jobs/:id/render", (req, res) => {
+app.post("/api/jobs/:id/render", async (req, res) => {
   const job = jobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: "Job not found." });
   if (job.status !== "review" && job.status !== "done")
@@ -702,6 +731,7 @@ app.post("/api/jobs/:id/render", (req, res) => {
 
   // Apply caption text corrections (word index → new text; timing preserved).
   const edits = req.body.wordEdits || {};
+  if (Object.keys(edits).length) await ensureWords(job);
   for (const [i, text] of Object.entries(edits)) {
     const idx = parseInt(i);
     if (job.words[idx] && typeof text === "string" && text.length <= 60)
@@ -737,6 +767,8 @@ app.post("/api/jobs/:id/render-clip", (req, res) => {
 /** Render a single clip #i from explicit keep-segments, then upsert job.clips[i]. */
 async function renderClipSegments(job, i, baseSegs, title) {
   const s = job.settings;
+  await ensureLocalSource(job);
+  await ensureWords(job);
   const { duration, fps, width, height } = job.meta;
   job.status = "cutting";
   job.stage = `rendering clip: ${title}`;
@@ -784,6 +816,8 @@ async function renderClipSegments(job, i, baseSegs, title) {
     },
   );
   if (subFile) fs.unlink(path.join(OUTPUT_DIR, subFile), () => {});
+  const outPath = await uploadOutput(job, out, `c${i}.mp4`);
+  fs.unlink(out, () => {});
 
   job.clips = job.clips || [];
   const entry = {
@@ -792,6 +826,7 @@ async function renderClipSegments(job, i, baseSegs, title) {
     duration: clipDur,
     start: segs[0].start,
     end: segs[segs.length - 1].end,
+    output_path: outPath,
   };
   const at = job.clips.findIndex((c) => c.i === i);
   if (at >= 0) job.clips[at] = entry;
@@ -879,10 +914,12 @@ app.get("/api/jobs", (req, res) => {
   res.json(list);
 });
 
-/** Full word list for transcript search (word + start time only). */
-app.get("/api/jobs/:id/words", (req, res) => {
+/** Full word list for transcript search (word + start/end time). */
+app.get("/api/jobs/:id/words", async (req, res) => {
   const job = jobs.get(req.params.id);
-  if (!job || !job.words)
+  if (!job) return res.status(404).json({ error: "Job not found." });
+  await ensureWords(job);
+  if (!job.words.length)
     return res.status(404).json({ error: "No transcript." });
   res.json(
     job.words.map((w, i) => ({
@@ -894,57 +931,62 @@ app.get("/api/jobs/:id/words", (req, res) => {
   );
 });
 
-/** Stream the ORIGINAL upload (range-enabled) so the clip editor can scrub the
- *  un-rendered ±2 min padding around a clip. */
-app.get("/api/source/:id", (req, res) => {
+/** Redirect to a signed URL for the ORIGINAL upload so the clip editor can
+ *  scrub the un-rendered ±2 min padding (Supabase serves range requests). */
+app.get("/api/source/:id", async (req, res) => {
   const job = jobs.get(req.params.id);
-  if (!job || !job.input || !fs.existsSync(job.input))
-    return res.status(404).send("No source.");
-  const stat = fs.statSync(job.input);
-  res.setHeader("Content-Type", "video/mp4");
-  res.setHeader("Accept-Ranges", "bytes");
-  const range = req.headers.range;
-  const m = range && /bytes=(\d+)-(\d*)/.exec(range);
-  if (m) {
-    const start = parseInt(m[1], 10);
-    const end = m[2] ? parseInt(m[2], 10) : stat.size - 1;
-    res.status(206);
-    res.setHeader("Content-Range", `bytes ${start}-${end}/${stat.size}`);
-    res.setHeader("Content-Length", end - start + 1);
-    fs.createReadStream(job.input, { start, end }).pipe(res);
-  } else {
-    res.setHeader("Content-Length", stat.size);
-    fs.createReadStream(job.input).pipe(res);
+  if (!job || !job.source_path) return res.status(404).send("No source.");
+  try {
+    res.redirect(await store.signedUrl("source", job.source_path, 3600));
+  } catch (e) {
+    res.status(500).send(e.message);
   }
 });
 
-app.get("/api/preview/:id", (req, res) => {
+app.get("/api/preview/:id", async (req, res) => {
   const job = jobs.get(req.params.id);
   if (!job || job.status !== "done") return res.status(404).send("Not ready.");
-  const file =
-    req.query.c !== undefined
-      ? path.join(OUTPUT_DIR, `${job.id}.c${parseInt(req.query.c)}.mp4`)
-      : path.join(
-          OUTPUT_DIR,
-          `${job.id}.v${parseInt(req.query.v) || job.version}.mp4`,
-        );
-  if (!fs.existsSync(file)) return res.status(404).send("Version not found.");
-  res.sendFile(file); // sendFile handles HTTP range requests for <video> seeking
+  const outKey = outputKeyFor(job, req.query);
+  if (!outKey) return res.status(404).send("Version not found.");
+  try {
+    res.redirect(await store.signedUrl("outputs", outKey, 3600));
+  } catch (e) {
+    res.status(500).send(e.message);
+  }
 });
 
-app.get("/api/download/:id", (req, res) => {
+app.get("/api/download/:id", async (req, res) => {
   const job = jobs.get(req.params.id);
   if (!job || job.status !== "done") return res.status(404).send("Not ready.");
+  const outKey = outputKeyFor(job, req.query);
+  if (!outKey) return res.status(404).send("Not found.");
   const isClip = req.query.c !== undefined;
-  const n = isClip
-    ? parseInt(req.query.c)
-    : parseInt(req.query.v) || job.version;
-  const file = path.join(OUTPUT_DIR, `${job.id}.${isClip ? "c" : "v"}${n}.mp4`);
-  if (!fs.existsSync(file)) return res.status(404).send("Not found.");
-  const base = path.parse(job.originalName).name;
+  const n = isClip ? parseInt(req.query.c) : parseInt(req.query.v) || job.version;
+  const base = path.parse(job.originalName || "clip").name;
   const clip = isClip ? (job.clips || []).find((x) => x.i === n) : null;
-  res.download(file, clip ? `${slug(clip.title)}.mp4` : `${base}.v${n}.mp4`);
+  const name = clip ? `${slug(clip.title)}.mp4` : `${base}.v${n}.mp4`;
+  try {
+    // Supabase adds a Content-Disposition when we pass `download`.
+    const { data, error } = await store.supabase.storage
+      .from("outputs")
+      .createSignedUrl(outKey, 3600, { download: name });
+    if (error) throw error;
+    res.redirect(data.signedUrl);
+  } catch (e) {
+    res.status(500).send(e.message);
+  }
 });
+
+/** Resolve the outputs-bucket key for a preview/download request. */
+function outputKeyFor(job, q) {
+  if (q.c !== undefined) {
+    const clip = (job.clips || []).find((x) => x.i === parseInt(q.c));
+    return clip ? clip.output_path : null;
+  }
+  const v = parseInt(q.v) || job.version;
+  const ver = (job.versions || []).find((x) => x.v === v);
+  return ver ? ver.output_path : null;
+}
 
 function clamp(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v));
@@ -959,11 +1001,26 @@ function slug(t) {
   );
 }
 
-app.listen(PORT, () => {
-  console.log(`ClipSurgeon running → http://localhost:${PORT}`);
-  console.log(
-    process.env.GROQ_API_KEY
-      ? "AI mode: ready ✓"
-      : "AI mode: OFF — add GROQ_API_KEY to .env",
-  );
-});
+async function init() {
+  if (store.ready) {
+    try {
+      await loadPersistedJobs();
+    } catch (e) {
+      console.error("Job load failed:", e.message);
+    }
+  }
+  app.listen(PORT, () => {
+    console.log(`ClipSurgeon running → http://localhost:${PORT}`);
+    console.log(
+      store.ready
+        ? "Supabase: connected ✓"
+        : "Supabase: OFF — set SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / DEV_USER_ID",
+    );
+    console.log(
+      process.env.GROQ_API_KEY
+        ? "AI mode: ready ✓"
+        : "AI mode: OFF — add GROQ_API_KEY to .env",
+    );
+  });
+}
+init();

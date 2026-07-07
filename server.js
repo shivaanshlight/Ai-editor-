@@ -38,6 +38,7 @@ const {
 } = require("./lib/ai");
 const {
   extractAudio,
+  extractAudioFull,
   extractAudioChunked,
   buildSrt,
   buildAss,
@@ -45,6 +46,7 @@ const {
 } = require("./lib/media");
 const store = require("./lib/supabase");
 const { embed } = require("./lib/embed");
+const { diarize } = require("./lib/diarize");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -240,6 +242,7 @@ app.post(
         captions: b.captions === "true",
         softCaptions: b.softCaptions === "true",
         captionStyle: b.captionStyle === "bold" ? "bold" : "clean",
+        diarize: b.diarize === "true",
         fillerRemoval: b.fillerRemoval !== "false",
         shrinkPauses: b.shrinkPauses !== "false",
         punchIn: b.punchIn === "true",
@@ -312,6 +315,28 @@ async function processJob(job) {
   indexPassages(job, transcript).catch((e) =>
     console.error("indexPassages:", e.message),
   );
+
+  // Speaker diarization (optional) — who spoke when, for auto-reframe + labels.
+  job.speakers = [];
+  job.speakerCount = 0;
+  if (s.diarize && process.env.ASSEMBLYAI_API_KEY) {
+    try {
+      job.status = "analyzing";
+      job.stage = "identifying speakers";
+      saveJob(job);
+      const dAudio = path.join(UPLOAD_DIR, `${job.id}.diar.mp3`);
+      await extractAudioFull(job.input, dAudio);
+      const dia = await diarize(dAudio);
+      fs.unlink(dAudio, () => {});
+      job.speakers = dia.utterances;
+      job.speakerCount = dia.speakers.length;
+    } catch (e) {
+      console.error("diarize:", e.message);
+      job.speakers = [];
+      job.speakerCount = 0;
+    }
+    job.stage = "";
+  }
 
   // Chapters are a bonus, never a blocker.
   try {
@@ -393,6 +418,7 @@ function computePlanStats(job, keeps, duration) {
   }
   const estRuntime = keeps.reduce((s, k) => s + (k.end - k.start), 0);
   return {
+    speakers: job.speakerCount || 0,
     topics: (job.chapters || []).length,
     longPauses,
     fillers,

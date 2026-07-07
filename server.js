@@ -486,8 +486,9 @@ async function renderJob(job, keeps) {
  * splitting, and if a run is still too long we split roughly every 10–12 s at
  * the nearest word boundary — so a 3–4 h podcast still yields tidy blocks.
  *
- * The public shape is unchanged: each block is { start, end, type, words:[{i,w}] }
- * and the blocks tile every region contiguously, so the frontend is untouched.
+ * Every block is { start, end, type, words:[{i,w,s,e}] } and the blocks tile
+ * each region contiguously. Per-word start (s) / end (e) times let the review
+ * UI cut PART of a block (individual words) instead of only whole blocks.
  * ------------------------------------------------------------------ */
 const SENTENCE_END = /[.!?…]["'”’)\]]*$/;
 const PAUSE_SPLIT = 0.8; // gap between words that reads as a sentence break
@@ -608,7 +609,6 @@ function subdivideRegion(region, rWords) {
     const rightStart = chunks[k + 1][0].start;
     let b = (leftEnd + rightStart) / 2;
     if (!isFinite(b)) b = leftEnd;
-    // Keep boundaries strictly increasing and inside the region.
     b = Math.max(bounds[k] + 1e-3, Math.min(b, region.end - 1e-3));
     bounds.push(b);
   }
@@ -618,17 +618,17 @@ function subdivideRegion(region, rWords) {
     start: bounds[k],
     end: bounds[k + 1],
     type: region.type,
-    words: c.map((w) => ({ i: w.i, w: w.word.trim() })),
+    // s/e = per-word source times, so the UI can cut individual words.
+    words: c.map((w) => ({ i: w.i, w: w.word.trim(), s: w.start, e: w.end })),
   }));
   return { sentenceCount, blocks };
 }
 
 /**
  * Build alternating keep/cut review blocks, each subdivided into sentence-sized
- * chunks from word timestamps. Every block is { start, end, type, words:[{i,w}] }.
+ * chunks from word timestamps so the human can flip whole blocks OR single words.
  */
 function buildBlocks(keeps, words, duration) {
-  // Alternate keep/cut regions across the whole timeline.
   const regions = [];
   let cursor = 0;
   for (const k of keeps) {
@@ -653,7 +653,6 @@ function buildBlocks(keeps, words, duration) {
   for (const r of regions) {
     const rWords = indexed.filter((x) => x.c >= r.start && x.c < r.end);
     const { sentenceCount, blocks } = subdivideRegion(r, rWords);
-    // Debug: verify subdivision is actually happening on long regions.
     console.log({
       regionLength: +(r.end - r.start).toFixed(1),
       sentenceCount,

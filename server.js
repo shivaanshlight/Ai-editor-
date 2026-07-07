@@ -147,6 +147,61 @@ async function indexPassages(job, transcript) {
   saveJob(job);
 }
 
+/* ---------- auto-reframe: follow the active speaker in vertical ----------
+ * v1 targets a fixed side-by-side / grid layout: speakers are assigned to
+ * left→right columns by first appearance, and each keep-segment is split at
+ * speaker turns so the vertical crop follows whoever is talking. (No per-frame
+ * face tracking yet — that's v2.)
+ */
+function speakerReframe(keeps, speakers, W, H) {
+  const order = [];
+  for (const u of speakers) if (!order.includes(u.speaker)) order.push(u.speaker);
+  const N = Math.min(Math.max(order.length, 1), 3);
+  const colOf = (spk) => Math.min(Math.max(order.indexOf(spk), 0), N - 1);
+
+  let cropW = Math.min(W, Math.round((H * 9) / 16));
+  cropW -= cropW % 2;
+  const xForCol = (c) => {
+    let x = Math.round(((c + 0.5) / N) * W - cropW / 2);
+    x = Math.max(0, Math.min(W - cropW, x));
+    return x - (x % 2);
+  };
+  const speakerAt = (t) => {
+    let last = order[0];
+    for (const u of speakers) {
+      if (t >= u.start && t <= u.end) return u.speaker;
+      if (u.start <= t) last = u.speaker;
+    }
+    return last;
+  };
+
+  const segs = [];
+  const reframe = [];
+  for (const k of keeps) {
+    const bounds = new Set([k.start, k.end]);
+    for (const u of speakers) {
+      if (u.start > k.start && u.start < k.end) bounds.add(u.start);
+      if (u.end > k.start && u.end < k.end) bounds.add(u.end);
+    }
+    const bs = [...bounds].sort((a, b) => a - b);
+    for (let i = 0; i < bs.length - 1; i++) {
+      const a = bs[i],
+        b = bs[i + 1];
+      if (b - a < 0.05) continue;
+      const x = xForCol(colOf(speakerAt((a + b) / 2)));
+      const prev = reframe[reframe.length - 1];
+      // Merge a run of same-column pieces so the filtergraph stays small.
+      if (prev && prev.x === x && Math.abs(segs[segs.length - 1].end - a) < 1e-3)
+        segs[segs.length - 1].end = b;
+      else {
+        segs.push({ start: a, end: b });
+        reframe.push({ x, w: cropW });
+      }
+    }
+  }
+  return { segs, reframe };
+}
+
 /** Lazily attach the transcript's words (kept in the transcripts table). */
 async function ensureWords(job) {
   if (job.words && job.words.length) return;
@@ -243,6 +298,7 @@ app.post(
         softCaptions: b.softCaptions === "true",
         captionStyle: b.captionStyle === "bold" ? "bold" : "clean",
         diarize: b.diarize === "true",
+        autoReframe: b.autoReframe === "true",
         fillerRemoval: b.fillerRemoval !== "false",
         shrinkPauses: b.shrinkPauses !== "false",
         punchIn: b.punchIn === "true",
@@ -457,11 +513,19 @@ async function renderClips(job, selectedIdx) {
     segs = quantizeSegments(segs, fps, duration);
     const clipDur = segs.reduce((sum, x) => sum + (x.end - x.start), 0);
 
+    let renderSegs = segs;
+    let reframe = null;
+    if (s.vertical && s.autoReframe && (job.speakers || []).length && width > height) {
+      const rf = speakerReframe(segs, job.speakers, width, height);
+      renderSegs = rf.segs;
+      reframe = rf.reframe;
+    }
+
     const out = path.join(OUTPUT_DIR, `${job.id}.c${c.i}.mp4`);
     let subFile = null;
     if (s.captions) {
       if (s.captionStyle === "bold") {
-        const ass = buildAss(job.words, segs, { vertical: s.vertical });
+        const ass = buildAss(job.words, segs, { vertical: s.vertical, width, height });
         if (ass) {
           subFile = `${job.id}.c${c.i}.ass`;
           fs.writeFileSync(path.join(OUTPUT_DIR, subFile), ass);
@@ -474,7 +538,7 @@ async function renderClips(job, selectedIdx) {
         }
       }
     }
-    await cutVideo(path.resolve(job.input), path.basename(out), segs, null, {
+    await cutVideo(path.resolve(job.input), path.basename(out), renderSegs, null, {
       punchIn: s.punchIn,
       width,
       height,
@@ -482,6 +546,7 @@ async function renderClips(job, selectedIdx) {
       subFile,
       subStyle: s.captionStyle === "clean" ? CAPTION_STYLES.clean : null,
       vertical: s.vertical,
+      reframe,
       cwd: OUTPUT_DIR,
     });
     if (subFile) fs.unlink(path.join(OUTPUT_DIR, subFile), () => {});
@@ -527,12 +592,28 @@ async function renderJob(job, keeps) {
   const soft = job.mode === "ai" && s.captions && s.softCaptions;
   if (job.mode === "ai" && s.captions && !soft) {
     if (s.captionStyle === "bold")
-      job.ass = buildAss(job.words, keeps, { vertical: s.vertical });
+      job.ass = buildAss(job.words, keeps, { vertical: s.vertical, width, height });
     else job.srt = buildSrt(job.words, keeps);
   }
 
   job.segments = keeps;
   job.keptDuration = keeps.reduce((sum, k) => sum + (k.end - k.start), 0);
+
+  // Auto-reframe: split the keeps at speaker turns so the vertical crop follows
+  // the active speaker. Only for landscape multi-speaker sources in vertical.
+  let renderSegs = keeps;
+  let reframe = null;
+  if (
+    job.mode === "ai" &&
+    s.vertical &&
+    s.autoReframe &&
+    (job.speakers || []).length &&
+    width > height
+  ) {
+    const rf = speakerReframe(keeps, job.speakers, width, height);
+    renderSegs = rf.segs;
+    reframe = rf.reframe;
+  }
 
   job.status = "cutting";
   let subFile = null; // burned-in subtitle file (filtered into the video)
@@ -555,7 +636,7 @@ async function renderJob(job, keeps) {
   await cutVideo(
     path.resolve(job.input),
     path.basename(job.output),
-    keeps,
+    renderSegs,
     (sec) => {
       job.progress = Math.min(99, Math.round((sec / job.keptDuration) * 100));
     },
@@ -568,6 +649,7 @@ async function renderJob(job, keeps) {
       softSubFile,
       subStyle: s.captionStyle === "clean" ? CAPTION_STYLES.clean : null,
       vertical: job.mode === "ai" && s.vertical,
+      reframe,
       musicPath:
         job.mode === "ai" && s.musicPath ? path.resolve(s.musicPath) : null,
       musicVol: s.musicVol,
@@ -866,11 +948,19 @@ async function renderClipSegments(job, i, baseSegs, title) {
   segs = quantizeSegments(segs, fps, duration);
   const clipDur = segs.reduce((sum, x) => sum + (x.end - x.start), 0);
 
+  let renderSegs = segs;
+  let reframe = null;
+  if (s.vertical && s.autoReframe && (job.speakers || []).length && width > height) {
+    const rf = speakerReframe(segs, job.speakers, width, height);
+    renderSegs = rf.segs;
+    reframe = rf.reframe;
+  }
+
   const out = path.join(OUTPUT_DIR, `${job.id}.c${i}.mp4`);
   let subFile = null;
   if (s.captions) {
     if (s.captionStyle === "bold") {
-      const ass = buildAss(job.words, segs, { vertical: s.vertical });
+      const ass = buildAss(job.words, segs, { vertical: s.vertical, width, height });
       if (ass) {
         subFile = `${job.id}.c${i}.ass`;
         fs.writeFileSync(path.join(OUTPUT_DIR, subFile), ass);
@@ -886,7 +976,7 @@ async function renderClipSegments(job, i, baseSegs, title) {
   await cutVideo(
     path.resolve(job.input),
     path.basename(out),
-    segs,
+    renderSegs,
     (sec) => {
       job.progress = Math.min(99, Math.round((sec / Math.max(clipDur, 0.1)) * 100));
     },
@@ -898,6 +988,7 @@ async function renderClipSegments(job, i, baseSegs, title) {
       subFile,
       subStyle: s.captionStyle === "clean" ? CAPTION_STYLES.clean : null,
       vertical: s.vertical,
+      reframe,
       cwd: OUTPUT_DIR,
     },
   );

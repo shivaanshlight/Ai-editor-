@@ -1133,6 +1133,10 @@
               pauses</label
             >
             <label class="tog"
+              ><input type="checkbox" id="diarize" /> Detect speakers
+              (diarization)</label
+            >
+            <label class="tog"
               ><input type="checkbox" id="punchIn" checked /> Punch-in zooms on
               cuts</label
             >
@@ -1187,6 +1191,10 @@
             <label class="tog"
               ><input type="checkbox" id="clipVertical" checked /> Vertical
               9:16</label
+            >
+            <label class="tog"
+              ><input type="checkbox" id="clipDiarize" /> Detect speakers
+              (diarization)</label
             >
             <label class="tog"
               ><input type="checkbox" id="clipPunchIn" checked /> Punch-in
@@ -1514,6 +1522,7 @@
           form.append("captionStyle", ccap === "bold" ? "bold" : "clean");
           form.append("vertical", $("clipVertical").checked);
           form.append("punchIn", $("clipPunchIn").checked);
+          form.append("diarize", $("clipDiarize").checked);
           form.append("review", $("clipReview").checked);
           form.append("draft", $("clipDraft").checked);
         }
@@ -1528,6 +1537,7 @@
             "vertical",
             "review",
             "draft",
+            "diarize",
           ].forEach((k) => form.append(k, $(k).checked));
           const cap = $("captionStyle").value;
           form.append("captions", cap !== "none");
@@ -1722,6 +1732,7 @@
         if (!p) return (el.style.display = "none");
         el.style.display = "block";
         const tiles = [
+          ...(p.speakers ? [["speakers", p.speakers]] : []),
           ["topics", p.topics],
           ["long pauses", p.longPauses],
           ["filler words", p.fillers],

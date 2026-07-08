@@ -385,10 +385,23 @@ async function processJob(job) {
       job.input,
       meta.duration,
     );
-    transcript = await transcribeLong(chunks, (i, n) => {
-      job.progress = Math.round((i / n) * 100);
-      job.stage = n > 1 ? `chunk ${i + 1} of ${n}` : "";
-    });
+    // Per-chunk cache (keyed by file fingerprint + chunk index) so a throttled
+    // retry resumes instead of re-transcribing — critical on the free tier's
+    // audio-per-hour limit.
+    const chunkCache = store.ready
+      ? {
+          get: (i) => store.getTranscript(`${fp}#${i}`),
+          set: (i, data) => store.saveTranscript(`${fp}#${i}`, data),
+        }
+      : null;
+    transcript = await transcribeLong(
+      chunks,
+      (i, n) => {
+        job.progress = Math.round((i / n) * 100);
+        job.stage = n > 1 ? `chunk ${i + 1} of ${n}` : "";
+      },
+      chunkCache,
+    );
     for (const c of chunks) fs.unlink(c.path, () => {});
     await store.saveTranscript(fp, transcript);
   }

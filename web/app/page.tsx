@@ -54,11 +54,24 @@ const PROCESSING = new Set([
   "finishing",
 ]);
 
+type PerMode<T> = Record<Mode, T>;
+
 export default function Page() {
   const [mode, setMode] = useState<Mode>("ai");
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [editingClip, setEditingClip] = useState<ClipPlan | null>(null);
-  const [uploadErr, setUploadErr] = useState("");
+
+  // Each mode owns its own job + editor state, so switching tabs never loses an
+  // in-flight render and one mode's result never appears under another.
+  const [jobIds, setJobIds] = useState<PerMode<string | null>>({
+    ai: null,
+    clips: null,
+    silence: null,
+  });
+  const [errs, setErrs] = useState<PerMode<string>>({ ai: "", clips: "", silence: "" });
+  const [editing, setEditing] = useState<PerMode<ClipPlan | null>>({
+    ai: null,
+    clips: null,
+    silence: null,
+  });
   const [uploading, setUploading] = useState(false);
 
   const [ai, setAi] = useState<AiSettings>(defaultAi);
@@ -66,37 +79,40 @@ export default function Page() {
   const [silence, setSilence] = useState<SilenceSettings>(defaultSilence);
   const [music, setMusic] = useState<File | null>(null);
 
-  const { job, poke } = useJob(jobId);
+  const activeJobId = jobIds[mode];
+  const { job, poke } = useJob(activeJobId);
+  const editingClip = editing[mode];
 
-  // Switching modes abandons the current job view — each feature stays on its
-  // own screen and never inherits another feature's result.
-  const switchMode = (m: Mode) => {
-    if (m === mode) return;
-    setMode(m);
-    setJobId(null);
-    setEditingClip(null);
-    setUploadErr("");
-  };
+  const setJobFor = (m: Mode, id: string | null) =>
+    setJobIds((p) => ({ ...p, [m]: id }));
+  const setErrFor = (m: Mode, msg: string) => setErrs((p) => ({ ...p, [m]: msg }));
+  const setEditingFor = (m: Mode, c: ClipPlan | null) =>
+    setEditing((p) => ({ ...p, [m]: c }));
+
+  // Switching modes just changes which mode's state we look at — nothing is
+  // reset, so a render in progress keeps going and is still there on return.
+  const switchMode = (m: Mode) => setMode(m);
 
   const reset = () => {
-    setJobId(null);
-    setEditingClip(null);
-    setUploadErr("");
+    setJobFor(mode, null);
+    setEditingFor(mode, null);
+    setErrFor(mode, "");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const handleFile = useCallback(
     async (file: File) => {
-      setUploadErr("");
+      const m = mode;
+      setErrFor(m, "");
       setUploading(true);
       try {
-        const fields = buildFields(mode, ai, clips, silence);
-        const { id } = await uploadJob(file, fields, mode === "ai" ? music : null);
-        setEditingClip(null);
-        setJobId(id);
+        const fields = buildFields(m, ai, clips, silence);
+        const { id } = await uploadJob(file, fields, m === "ai" ? music : null);
+        setEditingFor(m, null);
+        setJobFor(m, id);
         poke();
       } catch (e: any) {
-        setUploadErr(e.message || "Upload failed.");
+        setErrFor(m, e.message || "Upload failed.");
       } finally {
         setUploading(false);
       }
@@ -105,23 +121,23 @@ export default function Page() {
   );
 
   const onReviewRender = async (included: Segment[], wordEdits: Record<number, string>) => {
-    if (!jobId) return;
-    await renderEdit(jobId, included, wordEdits);
+    if (!activeJobId) return;
+    await renderEdit(activeJobId, included, wordEdits);
     poke();
   };
   const onClipsRender = async (selected: number[]) => {
-    if (!jobId) return;
-    await renderClips(jobId, selected);
+    if (!activeJobId) return;
+    await renderClips(activeJobId, selected);
     poke();
   };
   const onClipRender = async (i: number, segments: Segment[], title: string) => {
-    if (!jobId) return;
-    setEditingClip(null);
-    await renderClip(jobId, i, segments, title);
+    if (!activeJobId) return;
+    setEditingFor(mode, null);
+    await renderClip(activeJobId, i, segments, title);
     poke();
   };
 
-  const showSetup = !jobId || (job && job.status === "error");
+  const showSetup = !activeJobId || (job && job.status === "error");
 
   return (
     <>
@@ -136,50 +152,46 @@ export default function Page() {
 
             <Dropzone onFile={handleFile} disabled={uploading} />
 
-            {uploading && (
-              <p className="mt-3 text-[13px] text-muted">Uploading…</p>
-            )}
-            {(uploadErr || job?.error) && (
+            {uploading && <p className="mt-3 text-[13px] text-muted">Uploading…</p>}
+            {(errs[mode] || job?.error) && (
               <div className="mt-4 rounded-xl border border-[var(--cut-line)] bg-[var(--cut-bg)] px-3.5 py-3 text-[13.5px] text-cut">
-                {uploadErr || job?.error}
+                {errs[mode] || job?.error}
               </div>
             )}
 
-            {mode === "ai" && (
-              <AiConfig value={ai} onChange={setAi} onMusic={setMusic} />
-            )}
+            {mode === "ai" && <AiConfig value={ai} onChange={setAi} onMusic={setMusic} />}
             {mode === "clips" && <ClipsConfig value={clips} onChange={setClips} />}
-            {mode === "silence" && (
-              <SilenceConfig value={silence} onChange={setSilence} />
-            )}
+            {mode === "silence" && <SilenceConfig value={silence} onChange={setSilence} />}
           </section>
         )}
 
-        {jobId && job && job.status !== "error" && (
+        {activeJobId && !showSetup && (
           <section className="card mt-5 p-5 sm:p-6">
-            {PROCESSING.has(job.status) && <Progress job={job} />}
+            {!job && <p className="text-muted">Loading…</p>}
 
-            {job.status === "review" && (
+            {job && PROCESSING.has(job.status) && <Progress job={job} />}
+
+            {job && job.status === "review" && (
               <Review job={job} onRender={onReviewRender} />
             )}
 
-            {job.status === "clipReview" &&
+            {job && job.status === "clipReview" &&
               (editingClip ? (
                 <ClipEditor
                   job={job}
                   clip={editingClip}
                   onRender={onClipRender}
-                  onBack={() => setEditingClip(null)}
+                  onBack={() => setEditingFor(mode, null)}
                 />
               ) : (
                 <ClipReview
                   job={job}
                   onRender={onClipsRender}
-                  onEdit={setEditingClip}
+                  onEdit={(c) => setEditingFor(mode, c)}
                 />
               ))}
 
-            {job.status === "done" &&
+            {job && job.status === "done" &&
               (job.clips && job.clips.length ? (
                 <ClipsResult job={job} vertical={clips.vertical} onNew={reset} />
               ) : (

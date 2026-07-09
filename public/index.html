@@ -874,6 +874,92 @@
         color: var(--ink);
         border-color: var(--line-2);
       }
+      #planCard {
+        display: none;
+        background: var(--surface-2);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 16px;
+        margin: 6px 0 4px;
+      }
+      .plan-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 14px;
+      }
+      .plan-head h3 {
+        font-size: 15px;
+        font-weight: 620;
+        letter-spacing: -0.01em;
+      }
+      .pstatus {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 12px;
+        color: var(--keep);
+        font-weight: 560;
+      }
+      .pstatus i {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--keep);
+        box-shadow: 0 0 0 3px var(--keep-bg);
+      }
+      #planCard .tiles {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+        gap: 1px;
+        background: var(--line);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      #planCard .tile {
+        background: var(--surface);
+        padding: 13px 15px;
+      }
+      #planCard .tile .n {
+        font-size: 21px;
+        font-weight: 500;
+        letter-spacing: -0.02em;
+      }
+      #planCard .tile .l {
+        color: var(--muted);
+        font-size: 11.5px;
+        margin-top: 2px;
+      }
+      .runtime {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-top: 14px;
+        padding: 13px 15px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        flex-wrap: wrap;
+      }
+      .runtime .from {
+        color: var(--muted);
+      }
+      .runtime .to {
+        font-size: 19px;
+        font-weight: 500;
+      }
+      .runtime .arrow {
+        color: var(--accent);
+      }
+      .runtime .save {
+        color: var(--keep);
+        font-weight: 560;
+        font-size: 13px;
+        margin-left: auto;
+      }
     </style>
   </head>
   <body>
@@ -911,6 +997,8 @@
             <button class="chip" data-preset="youtube">YouTube</button>
             <button class="chip" data-preset="shorts">Reels / Shorts</button>
             <button class="chip" data-preset="podcast">Podcast clip</button>
+            <button class="chip" data-preset="interview">Interview</button>
+            <button class="chip" data-preset="educational">Educational</button>
           </div>
           <textarea
             id="instruction"
@@ -960,6 +1048,10 @@
             <label class="tog"
               ><input type="checkbox" id="captions" checked /> Burn in
               captions</label
+            >
+            <label class="tog"
+              ><input type="checkbox" id="softCaptions" /> Soft captions
+              (selectable, off by default)</label
             >
             <label class="tog"
               ><input type="checkbox" id="fillerRemoval" checked /> Cut filler
@@ -1099,6 +1191,7 @@
 
         <div id="reviewPanel">
           <p class="note" id="revSummary"></p>
+          <div id="planCard"></div>
           <div class="rev-head">
             <span
               >Click a word to cut/keep just it · click a block's edge to flip
@@ -1249,6 +1342,22 @@
           punchIn: false,
           targetDuration: "90",
         },
+        interview: {
+          instruction:
+            "Edit like an interview: keep the full question-and-answer exchanges, cut host filler and dead air, keep it conversational.",
+          vertical: false,
+          captionStyle: "clean",
+          punchIn: false,
+          targetDuration: "",
+        },
+        educational: {
+          instruction:
+            "Edit like a tutorial: keep clear explanations and steps in order, cut tangents and repetition, tighten the pacing.",
+          vertical: false,
+          captionStyle: "clean",
+          punchIn: false,
+          targetDuration: "",
+        },
       };
       document.querySelectorAll("#presets .chip").forEach(
         (c) =>
@@ -1326,6 +1435,7 @@
             form.append("targetDuration", $("targetDuration").value);
           [
             "captions",
+            "softCaptions",
             "fillerRemoval",
             "shrinkPauses",
             "punchIn",
@@ -1410,6 +1520,7 @@
         $("revSummary").textContent = job.summary
           ? "AI editor's plan: " + job.summary
           : "Review the planned cuts:";
+        renderPlanCard(job);
         const box = $("blocks");
         box.innerHTML = "";
         const blocks = job.reviewBlocks || [];
@@ -1513,6 +1624,44 @@
         return segs;
       }
 
+      function renderPlanCard(job) {
+        const el = $("planCard");
+        if (!el) return;
+        const p = job.planStats;
+        if (!p) return (el.style.display = "none");
+        el.style.display = "block";
+        const tiles = [
+          ["topics", p.topics],
+          ["long pauses", p.longPauses],
+          ["filler words", p.fillers],
+          ["kept segments", p.cuts],
+        ];
+        const pct = p.originalRuntime
+          ? Math.round((1 - p.estRuntime / p.originalRuntime) * 100)
+          : 0;
+        el.innerHTML =
+          '<div class="plan-head"><h3>Here\u2019s what I found</h3>' +
+          '<span class="pstatus"><i></i>Analysis complete</span></div>' +
+          '<div class="tiles">' +
+          tiles
+            .map(
+              (t) =>
+                '<div class="tile"><div class="n mono">' +
+                t[1] +
+                '</div><div class="l">' +
+                t[0] +
+                "</div></div>",
+            )
+            .join("") +
+          "</div>" +
+          '<div class="runtime"><span class="from mono">' +
+          fmt(p.originalRuntime) +
+          '</span><span class="arrow">\u2192</span><span class="to mono">' +
+          fmt(p.estRuntime) +
+          '</span><span class="save">\u2212' +
+          pct +
+          "% runtime</span></div>";
+      }
       function revStats(blocks) {
         const kept = buildIncluded(blocks).reduce(
           (s, x) => s + (x.end - x.start),

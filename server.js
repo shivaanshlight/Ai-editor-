@@ -217,6 +217,7 @@ app.post(
           ? clamp(parseFloat(b.targetDuration), 5, 36000)
           : null,
         captions: b.captions === "true",
+        softCaptions: b.softCaptions === "true",
         captionStyle: b.captionStyle === "bold" ? "bold" : "clean",
         fillerRemoval: b.fillerRemoval !== "false",
         shrinkPauses: b.shrinkPauses !== "false",
@@ -336,6 +337,7 @@ async function processJob(job) {
   );
   const keeps = validateEdl(plan.segments, meta.duration, job.words);
   job.summary = plan.summary || "";
+  job.planStats = computePlanStats(job, keeps, meta.duration);
 
   if (s.review) {
     // Pause here: hand the plan to the human.
@@ -346,6 +348,32 @@ async function processJob(job) {
     return;
   }
   return enqueueRender(job, () => renderJob(job, keeps));
+}
+
+const PLAN_FILLERS = new Set([
+  "um", "uh", "umm", "uhh", "er", "erm", "hmm", "mmm", "ah", "uhm",
+]);
+
+/** Cheap, honest counts for the "AI edit plan" summary card. */
+function computePlanStats(job, keeps, duration) {
+  const words = job.words || [];
+  let longPauses = 0;
+  for (let i = 0; i < words.length - 1; i++)
+    if (words[i + 1].start - words[i].end > 0.8) longPauses++;
+  let fillers = 0;
+  for (const w of words) {
+    const c = w.word.trim().toLowerCase().replace(/[.,!?]/g, "");
+    if (PLAN_FILLERS.has(c)) fillers++;
+  }
+  const estRuntime = keeps.reduce((s, k) => s + (k.end - k.start), 0);
+  return {
+    topics: (job.chapters || []).length,
+    longPauses,
+    fillers,
+    cuts: keeps.length, // kept segments = number of joins the AI is making
+    estRuntime: Math.round(estRuntime),
+    originalRuntime: Math.round(duration),
+  };
 }
 
 function textInRange(words, start, end) {
@@ -444,7 +472,11 @@ async function renderJob(job, keeps) {
   }
   keeps = quantizeSegments(keeps, fps, duration);
 
-  if (job.mode === "ai" && s.captions) {
+  // Soft captions ship as a selectable SRT track (mov_text) — no burn-in; the
+  // viewer can toggle them, and they never touch the video pixels. Karaoke ASS
+  // can't be a soft track, so soft mode always uses plain SRT.
+  const soft = job.mode === "ai" && s.captions && s.softCaptions;
+  if (job.mode === "ai" && s.captions && !soft) {
     if (s.captionStyle === "bold")
       job.ass = buildAss(job.words, keeps, { vertical: s.vertical });
     else job.srt = buildSrt(job.words, keeps);
@@ -454,9 +486,16 @@ async function renderJob(job, keeps) {
   job.keptDuration = keeps.reduce((sum, k) => sum + (k.end - k.start), 0);
 
   job.status = "cutting";
-  let subFile = null;
+  let subFile = null; // burned-in subtitle file (filtered into the video)
+  let softSubFile = null; // muxed subtitle track (mov_text)
   if (job.mode === "ai" && s.captions) {
-    if (job.ass) {
+    if (soft) {
+      const srt = buildSrt(job.words, keeps);
+      if (srt) {
+        softSubFile = `${job.id}.v${job.version}.srt`;
+        fs.writeFileSync(path.join(OUTPUT_DIR, softSubFile), srt);
+      }
+    } else if (job.ass) {
       subFile = `${job.id}.v${job.version}.ass`;
       fs.writeFileSync(path.join(OUTPUT_DIR, subFile), job.ass);
     } else if (job.srt) {
@@ -477,6 +516,7 @@ async function renderJob(job, keeps) {
       height,
       draft: s.draft,
       subFile,
+      softSubFile,
       subStyle: s.captionStyle === "clean" ? CAPTION_STYLES.clean : null,
       vertical: job.mode === "ai" && s.vertical,
       musicPath:
@@ -486,6 +526,7 @@ async function renderJob(job, keeps) {
     },
   );
   if (subFile) fs.unlink(path.join(OUTPUT_DIR, subFile), () => {});
+  if (softSubFile) fs.unlink(path.join(OUTPUT_DIR, softSubFile), () => {});
 
   const outPath = await uploadOutput(job, job.output, `v${job.version}.mp4`);
   fs.unlink(job.output, () => {});
@@ -885,6 +926,7 @@ app.get("/api/jobs/:id", (req, res) => {
   };
   if (status === "review" || status === "done")
     payload.reviewBlocks = job.reviewBlocks;
+  if (job.planStats) payload.planStats = job.planStats;
   if (job.transcriptText)
     payload.transcript = job.transcriptText.slice(0, 6000);
   if (job.versions) {

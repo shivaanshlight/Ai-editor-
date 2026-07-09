@@ -330,6 +330,7 @@ app.post(
         captionStyle: b.captionStyle === "bold" ? "bold" : "clean",
         diarize: b.diarize === "true",
         autoReframe: b.autoReframe === "true",
+        enhanceAudio: b.enhanceAudio === "true",
         fillerRemoval: b.fillerRemoval !== "false",
         shrinkPauses: b.shrinkPauses !== "false",
         punchIn: b.punchIn === "true",
@@ -626,6 +627,7 @@ async function renderClips(job, selectedIdx) {
       vertical: s.vertical,
       reframe,
       framing: s.punchIn && !reframe ? planFraming(renderSegs, job.speakers) : null,
+      enhanceAudio: s.enhanceAudio,
       cwd: OUTPUT_DIR,
     });
     if (subFile) fs.unlink(path.join(OUTPUT_DIR, subFile), () => {});
@@ -736,6 +738,7 @@ async function renderJob(job, keeps) {
       musicPath:
         job.mode === "ai" && s.musicPath ? path.resolve(s.musicPath) : null,
       musicVol: s.musicVol,
+      enhanceAudio: s.enhanceAudio,
       cwd: OUTPUT_DIR,
     },
   );
@@ -1073,6 +1076,7 @@ async function renderClipSegments(job, i, baseSegs, title) {
       vertical: s.vertical,
       reframe,
       framing: s.punchIn && !reframe ? planFraming(renderSegs, job.speakers) : null,
+      enhanceAudio: s.enhanceAudio,
       cwd: OUTPUT_DIR,
     },
   );

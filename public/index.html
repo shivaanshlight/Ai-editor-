@@ -960,6 +960,53 @@
         font-size: 13px;
         margin-left: auto;
       }
+      #searchBar {
+        display: none;
+        margin-top: 16px;
+      }
+      #searchInput {
+        font-size: 14.5px;
+        padding: 12px 14px;
+      }
+      #searchResults {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-top: 8px;
+        max-height: 260px;
+        overflow-y: auto;
+      }
+      #searchResults:empty {
+        display: none;
+      }
+      .sres {
+        display: flex;
+        gap: 12px;
+        align-items: baseline;
+        padding: 9px 12px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: var(--surface-2);
+        cursor: pointer;
+        font-size: 13px;
+      }
+      .sres:hover {
+        border-color: var(--accent);
+      }
+      .sres .t {
+        color: var(--accent);
+        font-size: 11.5px;
+        flex: none;
+      }
+      .sres .s {
+        color: var(--muted);
+        line-height: 1.45;
+      }
+      .sres-hint {
+        color: var(--faint);
+        font-size: 12.5px;
+        padding: 6px 2px;
+      }
     </style>
   </head>
   <body>
@@ -1183,6 +1230,16 @@
           ><span class="pct mono" id="pct">0%</span>
         </div>
         <div class="bar"><div id="barFill"></div></div>
+
+        <div id="searchBar">
+          <input
+            id="searchInput"
+            class="in"
+            placeholder="Find a moment by meaning — e.g. &quot;the part about pricing&quot;"
+            autocomplete="off"
+          />
+          <div id="searchResults"></div>
+        </div>
 
         <div id="transcriptPanel">
           <div class="cap">What it heard</div>
@@ -1410,6 +1467,9 @@
         $("err").textContent = "";
         wordEdits = {};
         cutWords = new Set();
+        $("searchInput").value = "";
+        $("searchResults").innerHTML = "";
+        $("searchBar").style.display = "none";
         setStatus("Uploading " + file.name + "…", 2);
 
         const form = new FormData();
@@ -1521,6 +1581,8 @@
           ? "AI editor's plan: " + job.summary
           : "Review the planned cuts:";
         renderPlanCard(job);
+        reviewBlocksData = job.reviewBlocks || [];
+        $("searchBar").style.display = job.searchReady ? "block" : "none";
         const box = $("blocks");
         box.innerHTML = "";
         const blocks = job.reviewBlocks || [];
@@ -1675,6 +1737,7 @@
       function showResult(job) {
         hide("reviewPanel", "transcriptPanel");
         show("resultPanel");
+        $("searchBar").style.display = job.searchReady ? "block" : "none";
         // Always the full-video editor here — leave any clip-edit mode.
         clipEdit = null;
         setClipEditUI(false);
@@ -2325,6 +2388,71 @@
         $("statusText").textContent = t;
         $("pct").textContent = Math.round(p) + "%";
         $("barFill").style.width = p + "%";
+      }
+      /* ---------- semantic search ---------- */
+      let searchTimer = null,
+        reviewBlocksData = [];
+      $("searchInput").addEventListener("input", () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(runSearch, 300);
+      });
+      async function runSearch() {
+        const q = $("searchInput").value.trim();
+        const box = $("searchResults");
+        if (!q) return (box.innerHTML = "");
+        box.innerHTML = '<div class="sres-hint">Searching…</div>';
+        try {
+          const r = await fetch(
+            "/api/jobs/" + jobId + "/search?q=" + encodeURIComponent(q),
+          );
+          const d = await r.json();
+          if (d.indexing)
+            return (box.innerHTML =
+              '<div class="sres-hint">Building the search index… try again in a moment.</div>');
+          if (d.error)
+            return (box.innerHTML =
+              '<div class="sres-hint">' + d.error + "</div>");
+          if (!d.results || !d.results.length)
+            return (box.innerHTML =
+              '<div class="sres-hint">No matching moments.</div>');
+          box.innerHTML = "";
+          d.results.forEach((m) => {
+            const el = document.createElement("div");
+            el.className = "sres";
+            const t = document.createElement("span");
+            t.className = "t mono";
+            t.textContent = fmt(m.start_s);
+            const s = document.createElement("span");
+            s.className = "s";
+            s.textContent = (m.text || "").slice(0, 160) + "…";
+            el.append(t, s);
+            el.onclick = () => jumpToMoment(m.start_s);
+            box.appendChild(el);
+          });
+        } catch {
+          box.innerHTML = '<div class="sres-hint">Search unavailable.</div>';
+        }
+      }
+      function jumpToMoment(t) {
+        if ($("resultPanel").style.display === "block") {
+          if (clipEdit) $("preview").currentTime = t;
+          else {
+            const o = srcToOut(t);
+            if (o !== null && isFinite(o)) $("preview").currentTime = o;
+          }
+          setPlayhead(t);
+          $("preview").scrollIntoView({ behavior: "smooth", block: "center" });
+        } else {
+          const i = reviewBlocksData.findIndex(
+            (b) => t >= b.start && t < b.end,
+          );
+          const node = i >= 0 && $("blocks").children[i];
+          if (node) {
+            node.scrollIntoView({ behavior: "smooth", block: "center" });
+            node.style.outline = "2px solid var(--accent)";
+            setTimeout(() => (node.style.outline = ""), 1300);
+          }
+        }
       }
       function fail(m) {
         $("err").textContent = m;

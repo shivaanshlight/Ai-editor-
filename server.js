@@ -44,6 +44,7 @@ const {
   CAPTION_STYLES,
 } = require("./lib/media");
 const store = require("./lib/supabase");
+const { embed } = require("./lib/embed");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -104,6 +105,44 @@ async function loadPersistedJobs() {
 async function ensureLocalSource(job) {
   if (job.input && fs.existsSync(job.input)) return job.input;
   throw new Error("Source video is no longer on disk — please upload it again.");
+}
+
+/* ---------- semantic search: chunk → embed → store ---------- */
+
+/** Group words into ~20–30 s passages, preferring sentence ends. */
+function chunkPassages(words, { target = 20, max = 32 } = {}) {
+  const out = [];
+  let cur = [];
+  let startT = null;
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (startT === null) startT = w.start;
+    cur.push(w.word.trim());
+    const dur = w.end - startT;
+    const endsSentence = /[.!?]["'”’)\]]*$/.test(w.word.trim());
+    const last = i === words.length - 1;
+    if (last || (dur >= target && endsSentence) || dur >= max) {
+      const text = cur.join(" ").trim();
+      if (text) out.push({ start: startT, end: w.end, text });
+      cur = [];
+      startT = null;
+    }
+  }
+  return out;
+}
+
+/** Build + store the search index for a job. Non-critical: never blocks a job. */
+async function indexPassages(job, transcript) {
+  if (!store.ready) return;
+  const passages = chunkPassages(transcript.words || []);
+  if (!passages.length) return;
+  const vectors = await embed(passages.map((p) => p.text));
+  await store.savePassages(
+    job.id,
+    passages.map((p, i) => ({ ...p, embedding: vectors[i] })),
+  );
+  job.searchReady = true;
+  saveJob(job);
 }
 
 /** Lazily attach the transcript's words (kept in the transcripts table). */
@@ -267,6 +306,12 @@ async function processJob(job) {
   job.words = transcript.words || [];
   job.transcriptText = transcript.text || "";
   job.progress = 0;
+
+  // Build the semantic-search index in the background — never blocks editing.
+  job.searchReady = false;
+  indexPassages(job, transcript).catch((e) =>
+    console.error("indexPassages:", e.message),
+  );
 
   // Chapters are a bonus, never a blocker.
   try {
@@ -898,6 +943,7 @@ app.get("/api/jobs/:id", (req, res) => {
   if (status === "review" || status === "done")
     payload.reviewBlocks = job.reviewBlocks;
   if (job.planStats) payload.planStats = job.planStats;
+  payload.searchReady = !!job.searchReady;
   if (job.transcriptText)
     payload.transcript = job.transcriptText.slice(0, 6000);
   if (job.versions) {
@@ -942,6 +988,24 @@ app.get("/api/jobs/:id/words", async (req, res) => {
       e: Math.round(w.end * 10) / 10,
     })),
   );
+});
+
+/** Semantic search: find moments in the transcript by meaning. */
+app.get("/api/jobs/:id/search", async (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found." });
+  const q = String(req.query.q || "").trim();
+  if (!q) return res.json({ results: [] });
+  if (!store.ready)
+    return res.json({ results: [], error: "Search needs Supabase configured." });
+  if (!job.searchReady) return res.json({ indexing: true, results: [] });
+  try {
+    const [vec] = await embed([q]);
+    const results = await store.searchPassages(job.id, vec, 12);
+    res.json({ results });
+  } catch (e) {
+    res.json({ results: [], error: e.message });
+  }
 });
 
 /** Stream the ORIGINAL upload (range-enabled) so the clip editor can scrub the

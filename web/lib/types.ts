@@ -1,7 +1,7 @@
 // Shapes returned by the Express API (server.js). Kept intentionally loose
 // where the backend is loose, strict where the UI depends on it.
 
-export type Mode = "ai" | "clips" | "silence";
+export type Mode = "ai" | "clips" | "silence" | "highlights";
 
 export type JobStatus =
   | "analyzing"
@@ -98,7 +98,20 @@ export interface Job {
   clipPlans?: ClipPlan[];
   clips?: RenderedClip[];
   chapters?: Chapter[];
+  speakerLabels?: string[];
+  speakerNames?: Record<string, string>;
   queuePos?: number;
+}
+
+export interface ChatCitation {
+  start: number;
+  quote: string;
+}
+export interface ChatAnswer {
+  answer: string;
+  citations: ChatCitation[];
+  indexing?: boolean;
+  error?: string;
 }
 
 // The content-kit ("repurpose") payload.

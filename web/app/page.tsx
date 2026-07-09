@@ -13,9 +13,11 @@ import {
   defaultAi,
   defaultClips,
   defaultSilence,
+  defaultHighlights,
   type AiSettings,
   type ClipsSettings,
   type SilenceSettings,
+  type HighlightsSettings,
 } from "@/lib/settings";
 
 import Nav from "@/components/Nav";
@@ -23,6 +25,7 @@ import Dropzone from "@/components/Dropzone";
 import AiConfig from "@/components/AiConfig";
 import ClipsConfig from "@/components/ClipsConfig";
 import SilenceConfig from "@/components/SilenceConfig";
+import HighlightsConfig from "@/components/HighlightsConfig";
 import Progress from "@/components/Progress";
 import Review from "@/components/Review";
 import ClipReview from "@/components/ClipReview";
@@ -34,6 +37,10 @@ const HEROES: Record<Mode, { h: string; s: string }> = {
   ai: {
     h: "Raw footage in. Finished edit out.",
     s: "Describe the edit in plain English. Review the AI's plan, fix anything on the timeline, render as many versions as you need.",
+  },
+  highlights: {
+    h: "Turn hours into minutes.",
+    s: "The AI condenses your entire recording into one tight highlights cut — the best moments, stitched into a single watchable episode.",
   },
   clips: {
     h: "Find the moments worth posting.",
@@ -63,12 +70,19 @@ export default function Page() {
   // in-flight render and one mode's result never appears under another.
   const [jobIds, setJobIds] = useState<PerMode<string | null>>({
     ai: null,
+    highlights: null,
     clips: null,
     silence: null,
   });
-  const [errs, setErrs] = useState<PerMode<string>>({ ai: "", clips: "", silence: "" });
+  const [errs, setErrs] = useState<PerMode<string>>({
+    ai: "",
+    highlights: "",
+    clips: "",
+    silence: "",
+  });
   const [editing, setEditing] = useState<PerMode<ClipPlan | null>>({
     ai: null,
+    highlights: null,
     clips: null,
     silence: null,
   });
@@ -77,6 +91,7 @@ export default function Page() {
   const [ai, setAi] = useState<AiSettings>(defaultAi);
   const [clips, setClips] = useState<ClipsSettings>(defaultClips);
   const [silence, setSilence] = useState<SilenceSettings>(defaultSilence);
+  const [highlights, setHighlights] = useState<HighlightsSettings>(defaultHighlights);
   const [music, setMusic] = useState<File | null>(null);
 
   const activeJobId = jobIds[mode];
@@ -106,7 +121,7 @@ export default function Page() {
       setErrFor(m, "");
       setUploading(true);
       try {
-        const fields = buildFields(m, ai, clips, silence);
+        const fields = buildFields(m, ai, clips, silence, highlights);
         const { id } = await uploadJob(file, fields, m === "ai" ? music : null);
         setEditingFor(m, null);
         setJobFor(m, id);
@@ -117,12 +132,16 @@ export default function Page() {
         setUploading(false);
       }
     },
-    [mode, ai, clips, silence, music, poke],
+    [mode, ai, clips, silence, highlights, music, poke],
   );
 
-  const onReviewRender = async (included: Segment[], wordEdits: Record<number, string>) => {
+  const onReviewRender = async (
+    included: Segment[],
+    wordEdits: Record<number, string>,
+    speakerNames?: Record<string, string>,
+  ) => {
     if (!activeJobId) return;
-    await renderEdit(activeJobId, included, wordEdits);
+    await renderEdit(activeJobId, included, wordEdits, speakerNames);
     poke();
   };
   const onClipsRender = async (selected: number[]) => {
@@ -160,6 +179,9 @@ export default function Page() {
             )}
 
             {mode === "ai" && <AiConfig value={ai} onChange={setAi} onMusic={setMusic} />}
+            {mode === "highlights" && (
+              <HighlightsConfig value={highlights} onChange={setHighlights} />
+            )}
             {mode === "clips" && <ClipsConfig value={clips} onChange={setClips} />}
             {mode === "silence" && <SilenceConfig value={silence} onChange={setSilence} />}
           </section>

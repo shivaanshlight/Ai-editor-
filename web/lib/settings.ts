@@ -38,6 +38,15 @@ export interface SilenceSettings {
   padding: number;
 }
 
+export interface HighlightsSettings {
+  targetMinutes: number;
+  captionStyle: "none" | "bold" | "clean" | "soft";
+  fillerRemoval: boolean;
+  shrinkPauses: boolean;
+  review: boolean;
+  draft: boolean;
+}
+
 // Plain-language presets that set the three raw dials under the hood. Higher
 // noiseDb (closer to 0) counts more sound as "silence" = more aggressive.
 export const SILENCE_PRESETS: Record<
@@ -99,6 +108,15 @@ export const defaultSilence: SilenceSettings = {
   noiseDb: -35,
   minSilence: 0.6,
   padding: 0.15,
+};
+
+export const defaultHighlights: HighlightsSettings = {
+  targetMinutes: 10,
+  captionStyle: "none",
+  fillerRemoval: true,
+  shrinkPauses: true,
+  review: true,
+  draft: true,
 };
 
 export interface Preset {
@@ -164,7 +182,23 @@ export function buildFields(
   ai: AiSettings,
   clips: ClipsSettings,
   silence: SilenceSettings,
+  highlights: HighlightsSettings,
 ): UploadFields {
+  if (mode === "highlights") {
+    return {
+      mode,
+      targetDuration: Math.round(highlights.targetMinutes * 60),
+      captions: highlights.captionStyle !== "none",
+      softCaptions: highlights.captionStyle === "soft",
+      captionStyle: highlights.captionStyle === "bold" ? "bold" : "clean",
+      fillerRemoval: highlights.fillerRemoval,
+      shrinkPauses: highlights.shrinkPauses,
+      review: highlights.review,
+      draft: highlights.draft,
+      punchIn: false,
+      vertical: false,
+    };
+  }
   if (mode === "ai") {
     const f: UploadFields = {
       mode,

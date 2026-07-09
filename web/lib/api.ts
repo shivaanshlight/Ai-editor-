@@ -39,13 +39,22 @@ export async function renderEdit(
   id: string,
   included: Segment[],
   wordEdits: Record<number, string>,
+  speakerNames?: Record<string, string>,
 ): Promise<void> {
   const res = await fetch(`/api/jobs/${id}/render`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ included, wordEdits }),
+    body: JSON.stringify({ included, wordEdits, speakerNames }),
   });
   await jsonOrThrow(res);
+}
+
+export async function askVideo(
+  id: string,
+  q: string,
+): Promise<{ answer: string; citations: { start: number; quote: string }[]; indexing?: boolean; error?: string }> {
+  const res = await fetch(`/api/jobs/${id}/ask?q=${encodeURIComponent(q)}`);
+  return res.json();
 }
 
 export async function renderClips(id: string, selected: number[]): Promise<void> {

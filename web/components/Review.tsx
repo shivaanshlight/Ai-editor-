@@ -81,11 +81,18 @@ export default function Review({
   onRender,
 }: {
   job: Job;
-  onRender: (included: Segment[], wordEdits: Record<number, string>) => void;
+  onRender: (
+    included: Segment[],
+    wordEdits: Record<number, string>,
+    speakerNames?: Record<string, string>,
+  ) => void;
 }) {
   const blocks: ReviewBlock[] = useMemo(() => job.reviewBlocks || [], [job.reviewBlocks]);
   const [cut, setCut] = useState<Set<number>>(new Set());
   const [edits, setEdits] = useState<Record<number, string>>({});
+  const [names, setNames] = useState<Record<string, string>>(job.speakerNames || {});
+  const [phrase, setPhrase] = useState("");
+  const [phraseMsg, setPhraseMsg] = useState("");
   const blockRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   // Seed word-cut state from the AI's block decisions when the job arrives.
@@ -155,6 +162,32 @@ export default function Review({
     });
   };
 
+  // "Cut every time they say ___": scan all words for the phrase and mark the
+  // matching runs cut. Purely client-side over the word indices we already have.
+  const norm = (w: string) => w.toLowerCase().replace(/[^a-z0-9']/g, "");
+  const cutPhrase = () => {
+    const tokens = phrase.trim().toLowerCase().split(/\s+/).map(norm).filter(Boolean);
+    if (!tokens.length) return;
+    const flat: { i: number; n: string }[] = [];
+    for (const b of blocks) for (const w of b.words || []) flat.push({ i: w.i, n: norm(w.w) });
+    const hits = new Set<number>();
+    let matches = 0;
+    for (let k = 0; k + tokens.length <= flat.length; k++) {
+      let ok = true;
+      for (let j = 0; j < tokens.length; j++) if (flat[k + j].n !== tokens[j]) { ok = false; break; }
+      if (ok) {
+        matches++;
+        for (let j = 0; j < tokens.length; j++) hits.add(flat[k + j].i);
+      }
+    }
+    if (!matches) {
+      setPhraseMsg(`No matches for “${phrase.trim()}”.`);
+      return;
+    }
+    setCut((prev) => new Set([...prev, ...hits]));
+    setPhraseMsg(`Cut ${matches} time${matches === 1 ? "" : "s"}.`);
+  };
+
   const jump = (t: number) => {
     const i = blocks.findIndex((b) => t >= b.start && t < b.end);
     const node = blockRefs.current[i];
@@ -173,6 +206,53 @@ export default function Review({
       <PlanCard job={job} />
 
       <Search jobId={job.id} ready={!!job.searchReady} onJump={jump} />
+
+      {/* Name the speakers → burned-in lower-third tags */}
+      {(job.speakerLabels?.length ?? 0) > 0 && (
+        <div className="mt-4 rounded-2xl border border-line bg-surface2 p-4">
+          <h3 className="text-[14px] font-semibold">Name your speakers</h3>
+          <p className="mt-0.5 text-[12.5px] text-muted">
+            Add names to show a lower-third tag whenever each person is talking. Leave blank to skip.
+          </p>
+          <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
+            {job.speakerLabels!.map((label) => (
+              <div key={label} className="flex items-center gap-2.5">
+                <span className="mono w-24 flex-none text-[12px] text-faint">{label}</span>
+                <input
+                  className="input"
+                  placeholder="e.g. Alex Rivera"
+                  value={names[label] || ""}
+                  onChange={(e) => setNames((p) => ({ ...p, [label]: e.target.value }))}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Cut every time they say ___ */}
+      <div className="mt-4 rounded-2xl border border-line bg-surface2 p-4">
+        <h3 className="text-[14px] font-semibold">Cut a repeated word or phrase</h3>
+        <p className="mt-0.5 text-[12.5px] text-muted">
+          Remove every mention of something — a name, a sponsor, a filler word.
+        </p>
+        <div className="mt-3 flex gap-2">
+          <input
+            className="input"
+            placeholder='e.g. "you know" or a sponsor name'
+            value={phrase}
+            onChange={(e) => {
+              setPhrase(e.target.value);
+              setPhraseMsg("");
+            }}
+            onKeyDown={(e) => e.key === "Enter" && cutPhrase()}
+          />
+          <button className="btn" disabled={!phrase.trim()} onClick={cutPhrase}>
+            Cut all
+          </button>
+        </div>
+        {phraseMsg && <p className="mt-2 text-[12.5px] text-accent2">{phraseMsg}</p>}
+      </div>
 
       <div className="my-3 flex flex-wrap justify-between gap-3 text-[12.5px] text-faint">
         <span>
@@ -233,7 +313,7 @@ export default function Review({
         <button
           className="btn btn-primary"
           disabled={!included.length}
-          onClick={() => onRender(included, edits)}
+          onClick={() => onRender(included, edits, names)}
         >
           Render video
         </button>

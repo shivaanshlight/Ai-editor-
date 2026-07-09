@@ -2,10 +2,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Job, Segment, Version } from "@/lib/types";
 import { previewUrl, downloadUrl } from "@/lib/api";
-import { fmt, pct } from "@/lib/format";
+import { fmt, pct, fmtClock } from "@/lib/format";
 import Timeline, { type TlBlock } from "./Timeline";
 import ContentKit from "./ContentKit";
 import Search from "./Search";
+import Chat from "./Chat";
 
 function srcToOut(srcT: number, segs: Segment[]): number | null {
   let acc = 0;
@@ -114,6 +115,26 @@ export default function Result({
         </div>
       </div>
 
+      {(job.chapters?.length ?? 0) > 0 && (
+        <div className="mt-4">
+          <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.09em] text-muted">
+            Chapters — click to jump
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {job.chapters!.map((c, i) => (
+              <button
+                key={i}
+                onClick={() => jump(c.start)}
+                className="flex items-center gap-2 rounded-full border border-line bg-surface2 px-3 py-1.5 text-[12.5px] hover:border-[var(--accent-2)]"
+              >
+                <span className="mono text-accent2">{fmtClock(c.start)}</span>
+                <span className="text-muted">{c.title}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <Search jobId={job.id} ready={!!job.searchReady} onJump={jump} />
 
       <Timeline
@@ -141,7 +162,12 @@ export default function Result({
         <button className="btn" onClick={onNew}>New video</button>
       </div>
 
-      {job.mode !== "silence" && <ContentKit jobId={job.id} />}
+      {job.mode !== "silence" && (
+        <>
+          <Chat jobId={job.id} ready={!!job.searchReady} onJump={jump} />
+          <ContentKit jobId={job.id} />
+        </>
+      )}
     </div>
   );
 }

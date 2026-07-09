@@ -4,6 +4,7 @@ import type { Mode } from "@/lib/types";
 
 const MODES: { id: Mode; label: string }[] = [
   { id: "ai", label: "AI Edit" },
+  { id: "highlights", label: "Highlights" },
   { id: "clips", label: "Find Clips" },
   { id: "silence", label: "Quick Cut" },
 ];

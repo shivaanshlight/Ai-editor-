@@ -1593,7 +1593,11 @@
                 8 + (job.progress || 0) * 0.22,
               );
             if (job.status === "planning")
-              setStatus("AI is planning the edit…", 34);
+              setStatus(
+                (job.stage ? "AI editor — " + job.stage : "AI is planning the edit") +
+                  "…",
+                34 + (job.progress || 0) * 0.05,
+              );
             if (job.status === "cutting")
               setStatus(
                 "Cutting & encoding" + st + "…",

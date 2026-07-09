@@ -441,6 +441,10 @@ async function processJob(job) {
       transcript,
       { count: s.clipCount, minLen, maxLen, instruction: s.instruction },
       meta.duration,
+      (i, n) => {
+        job.stage = n > 1 ? `finding clips — part ${i + 1} of ${n}` : "";
+        job.progress = Math.round((i / n) * 100);
+      },
     );
     job.clipPlans = validateClips(found, meta.duration, job.words, {
       minLen: Math.max(8, minLen * 0.7),
@@ -471,6 +475,10 @@ async function processJob(job) {
     s.instruction,
     s.targetDuration,
     meta.duration,
+    (i, n) => {
+      job.stage = n > 1 ? `planning the edit — part ${i + 1} of ${n}` : "";
+      job.progress = Math.round((i / n) * 100);
+    },
   );
   const keeps = validateEdl(plan.segments, meta.duration, job.words);
   job.summary = plan.summary || "";

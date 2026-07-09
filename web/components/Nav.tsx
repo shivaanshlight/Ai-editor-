@@ -35,38 +35,44 @@ export default function Nav({
   };
 
   return (
-    <nav className="sticky top-0 z-30 backdrop-blur-md">
+    <nav className="sticky top-0 z-30 border-b border-line bg-[color-mix(in_srgb,var(--bg)_55%,transparent)] backdrop-blur-xl">
       <div className="mx-auto flex max-w-[1080px] items-center justify-between gap-4 px-5 py-3.5">
         <div className="flex items-center gap-2.5 font-semibold tracking-tight">
-          <span className="grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-[var(--accent-2)] to-[var(--accent)] text-[var(--accent-ink)] shadow-[var(--glow)]">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
-              <path
-                d="M4 7h16M4 12h10M4 17h13"
-                stroke="currentColor"
-                strokeWidth="2.4"
-                strokeLinecap="round"
-              />
+          <span
+            className="grid h-8 w-8 place-items-center rounded-xl text-white"
+            style={{
+              background: "linear-gradient(135deg, var(--accent), var(--accent-2))",
+              boxShadow: "0 0 18px -2px rgba(55,224,255,.75), inset 0 1px 0 rgba(255,255,255,.4)",
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path d="M4 7h16M4 12h10M4 17h13" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
             </svg>
           </span>
-          <span className="text-[15px]">edit<span className="text-accent">.ai</span></span>
+          <span className="text-[16px]">
+            edit<span className="text-accent2">.ai</span>
+          </span>
         </div>
 
         <div className="flex items-center gap-3">
-          <div
-            className="flex gap-0.5 rounded-xl border border-line bg-surface2 p-1"
-            role="tablist"
-          >
+          <div className="glass flex gap-0.5 rounded-2xl p-1" role="tablist">
             {MODES.map((m) => (
               <button
                 key={m.id}
                 role="tab"
                 aria-selected={mode === m.id}
                 onClick={() => onMode(m.id)}
-                className={`rounded-lg px-3.5 py-1.5 text-[13px] font-medium transition-colors ${
-                  mode === m.id
-                    ? "bg-surface text-ink shadow-[var(--shadow)]"
-                    : "text-muted hover:text-ink"
+                className={`rounded-xl px-3.5 py-1.5 text-[13px] font-medium transition-all ${
+                  mode === m.id ? "text-white" : "text-muted hover:text-ink"
                 }`}
+                style={
+                  mode === m.id
+                    ? {
+                        background: "linear-gradient(135deg, var(--accent), var(--accent-2))",
+                        boxShadow: "0 0 16px -3px rgba(55,224,255,.7)",
+                      }
+                    : undefined
+                }
               >
                 {m.label}
               </button>
@@ -76,7 +82,7 @@ export default function Nav({
             onClick={toggleTheme}
             aria-label="Toggle theme"
             title="Light / dark"
-            className="grid h-9 w-9 place-items-center rounded-[10px] border border-line bg-surface2 text-muted hover:text-ink hover:border-line2 transition-colors"
+            className="glass grid h-9 w-9 place-items-center rounded-xl text-muted transition-colors hover:text-ink"
           >
             {theme === "dark" ? "☾" : "☀"}
           </button>

@@ -19,15 +19,23 @@ export function Toggle({
           e.preventDefault();
           onChange(!checked);
         }}
-        className={`relative h-[22px] w-[38px] flex-none rounded-full border transition-colors ${
-          checked
-            ? "bg-[var(--accent)] border-transparent"
-            : "bg-surface2 border-line2"
+        className={`relative h-[24px] w-[42px] flex-none rounded-full border transition-all ${
+          checked ? "border-transparent" : "border-line2 bg-surface2"
         }`}
+        style={
+          checked
+            ? {
+                background:
+                  "linear-gradient(135deg, var(--accent), var(--accent-2))",
+                boxShadow:
+                  "0 0 16px -1px rgba(55,224,255,.7), 0 0 0 1px rgba(55,224,255,.35)",
+              }
+            : undefined
+        }
       >
         <span
-          className={`absolute top-[2px] h-[16px] w-[16px] rounded-full bg-white shadow transition-all ${
-            checked ? "left-[18px]" : "left-[2px]"
+          className={`absolute top-[2px] h-[18px] w-[18px] rounded-full bg-white transition-all ${
+            checked ? "left-[21px] shadow-[0_0_10px_rgba(255,255,255,.6)]" : "left-[2px] shadow"
           }`}
         />
       </span>

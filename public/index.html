@@ -1018,6 +1018,25 @@
         padding: 7px 11px;
         min-width: 34px;
       }
+      .clipHead {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .clipHead .score {
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--accent-ink);
+        background: var(--accent);
+        border-radius: 6px;
+        padding: 1px 7px;
+        flex: none;
+      }
+      .clipRow .why {
+        color: var(--ink);
+        font-size: 12.5px;
+        margin: 5px 0 0;
+      }
     </style>
   </head>
   <body>
@@ -1076,8 +1095,10 @@
             <div class="field">
               <label>Captions</label>
               <select id="captionStyle" class="in">
+                <option value="none">No captions</option>
                 <option value="bold">Karaoke — word highlight</option>
                 <option value="clean">Clean — small, bottom</option>
+                <option value="soft">Soft track — selectable</option>
               </select>
             </div>
             <div class="field">
@@ -1103,14 +1124,6 @@
             </div>
           </div>
           <div class="toggles">
-            <label class="tog"
-              ><input type="checkbox" id="captions" checked /> Burn in
-              captions</label
-            >
-            <label class="tog"
-              ><input type="checkbox" id="softCaptions" /> Soft captions
-              (selectable, off by default)</label
-            >
             <label class="tog"
               ><input type="checkbox" id="fillerRemoval" checked /> Cut filler
               words (um, uh)</label
@@ -1164,16 +1177,13 @@
             <div class="field">
               <label>Captions</label>
               <select id="clipCaptionStyle" class="in">
+                <option value="none">No captions</option>
                 <option value="bold">Karaoke — word highlight</option>
                 <option value="clean">Clean — small, bottom</option>
               </select>
             </div>
           </div>
           <div class="toggles">
-            <label class="tog"
-              ><input type="checkbox" id="clipCaptions" checked /> Burn in
-              captions</label
-            >
             <label class="tog"
               ><input type="checkbox" id="clipVertical" checked /> Vertical
               9:16</label
@@ -1499,8 +1509,9 @@
           form.append("instruction", $("clipInstruction").value);
           form.append("clipCount", $("clipCount").value);
           form.append("clipLen", $("clipLen").value);
-          form.append("captions", $("clipCaptions").checked);
-          form.append("captionStyle", $("clipCaptionStyle").value);
+          const ccap = $("clipCaptionStyle").value;
+          form.append("captions", ccap !== "none");
+          form.append("captionStyle", ccap === "bold" ? "bold" : "clean");
           form.append("vertical", $("clipVertical").checked);
           form.append("punchIn", $("clipPunchIn").checked);
           form.append("review", $("clipReview").checked);
@@ -1511,8 +1522,6 @@
           if ($("targetDuration").value)
             form.append("targetDuration", $("targetDuration").value);
           [
-            "captions",
-            "softCaptions",
             "fillerRemoval",
             "shrinkPauses",
             "punchIn",
@@ -1520,7 +1529,10 @@
             "review",
             "draft",
           ].forEach((k) => form.append(k, $(k).checked));
-          form.append("captionStyle", $("captionStyle").value);
+          const cap = $("captionStyle").value;
+          form.append("captions", cap !== "none");
+          form.append("softCaptions", cap === "soft");
+          form.append("captionStyle", cap === "bold" ? "bold" : "clean");
           form.append("musicVol", $("musicVol").value);
           if ($("musicInput").files[0])
             form.append("music", $("musicInput").files[0]);
@@ -2205,7 +2217,9 @@
           cb.checked = true;
           cb.dataset.i = c.i;
           const body = el("div", "");
-          const t = el("b", "", c.title);
+          const head = el("div", "clipHead");
+          head.append(el("b", "", c.title));
+          if (c.score) head.append(el("span", "score mono", c.score));
           const meta = el(
             "div",
             "meta",
@@ -2216,7 +2230,6 @@
               Math.round(c.end - c.start) +
               "s",
           );
-          const p = el("p", "", (c.text || "") + "…");
           const edit = el("button", "btn sm", "✎ Edit in timeline");
           edit.type = "button";
           edit.style.marginTop = "6px";
@@ -2225,7 +2238,9 @@
             e.stopPropagation();
             editClip(c);
           };
-          body.append(t, meta, p, edit);
+          body.append(head, meta);
+          if (c.reason) body.append(el("p", "why", c.reason));
+          body.append(el("p", "", (c.text || "") + "…"), edit);
           row.append(cb, body);
           list.appendChild(row);
         });

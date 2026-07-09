@@ -396,9 +396,10 @@ async function processJob(job) {
       : null;
     transcript = await transcribeLong(
       chunks,
-      (i, n) => {
+      (i, n, note) => {
         job.progress = Math.round((i / n) * 100);
-        job.stage = n > 1 ? `chunk ${i + 1} of ${n}` : "";
+        const base = n > 1 ? `chunk ${i + 1} of ${n}` : "";
+        job.stage = note ? `${base} — ${note}` : base;
       },
       chunkCache,
     );

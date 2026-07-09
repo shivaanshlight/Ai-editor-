@@ -202,6 +202,36 @@ function speakerReframe(keeps, speakers, W, H) {
   return { segs, reframe };
 }
 
+/**
+ * Smart transitions: decide a tight/wide framing per segment so the punch-in
+ * flips land on meaningful cuts — every real cut, and especially a speaker
+ * change — which is what makes a jump cut read as intentional.
+ */
+function planFraming(segments, speakers) {
+  const spkAt = (t) => {
+    let last = null;
+    for (const u of speakers || []) {
+      if (t >= u.start && t <= u.end) return u.speaker;
+      if (u.start <= t) last = u.speaker;
+    }
+    return last;
+  };
+  const hasSpk = (speakers || []).length > 0;
+  let tight = false;
+  const out = [];
+  for (let i = 0; i < segments.length; i++) {
+    if (i > 0) {
+      const gap = segments[i].start - segments[i - 1].end;
+      const realCut = gap > 0.35;
+      const spkChange =
+        hasSpk && spkAt(segments[i - 1].end) !== spkAt(segments[i].start);
+      if (realCut || spkChange) tight = !tight;
+    }
+    out.push(tight);
+  }
+  return out;
+}
+
 /** Lazily attach the transcript's words (kept in the transcripts table). */
 async function ensureWords(job) {
   if (job.words && job.words.length) return;
@@ -547,6 +577,7 @@ async function renderClips(job, selectedIdx) {
       subStyle: s.captionStyle === "clean" ? CAPTION_STYLES.clean : null,
       vertical: s.vertical,
       reframe,
+      framing: s.punchIn && !reframe ? planFraming(renderSegs, job.speakers) : null,
       cwd: OUTPUT_DIR,
     });
     if (subFile) fs.unlink(path.join(OUTPUT_DIR, subFile), () => {});
@@ -650,6 +681,10 @@ async function renderJob(job, keeps) {
       subStyle: s.captionStyle === "clean" ? CAPTION_STYLES.clean : null,
       vertical: job.mode === "ai" && s.vertical,
       reframe,
+      framing:
+        job.mode === "ai" && s.punchIn && !reframe
+          ? planFraming(renderSegs, job.speakers)
+          : null,
       musicPath:
         job.mode === "ai" && s.musicPath ? path.resolve(s.musicPath) : null,
       musicVol: s.musicVol,
@@ -989,6 +1024,7 @@ async function renderClipSegments(job, i, baseSegs, title) {
       subStyle: s.captionStyle === "clean" ? CAPTION_STYLES.clean : null,
       vertical: s.vertical,
       reframe,
+      framing: s.punchIn && !reframe ? planFraming(renderSegs, job.speakers) : null,
       cwd: OUTPUT_DIR,
     },
   );

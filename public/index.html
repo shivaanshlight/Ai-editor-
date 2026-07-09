@@ -22,6 +22,7 @@
         --keep-bg: #f0fdf4;
         --cut: #dc2626;
         --cut-bg: #fef2f2;
+        --mix-bg: #fffbeb;
         --brand: #f59e0b;
         --r: 8px;
       }
@@ -352,10 +353,24 @@
       .block.cut {
         background: var(--cut-bg);
         border-color: #fecaca;
-        opacity: 0.6;
       }
-      .block.cut .txt {
+      /* block with some words kept and some cut */
+      .block.mixed {
+        background: var(--mix-bg);
+        border-color: #fde68a;
+      }
+      .block .w {
+        cursor: pointer;
+        border-radius: 3px;
+        padding: 0 1.5px;
+      }
+      .block .w:hover {
+        background: rgba(0, 0, 0, 0.08);
+      }
+      /* a cut word — struck through regardless of the block's overall state */
+      .block .w.cut {
         text-decoration: line-through;
+        opacity: 0.42;
       }
       .block .w.edited {
         color: var(--brand);
@@ -922,8 +937,8 @@
           <p class="note" id="revSummary"></p>
           <div class="rev-head">
             <span
-              >Click a block to keep or cut it · double-click a word to fix its
-              caption</span
+              >Click a word to cut/keep just it · click a block's edge to flip
+              the whole block · double-click a word to fix its caption</span
             >
             <span class="mono" id="revStats"></span>
           </div>
@@ -1025,6 +1040,7 @@
         jobId = null,
         pollTimer = null;
       let wordEdits = {},
+        cutWords = new Set(),
         tlBlocks = [],
         selIdx = -1,
         jobDuration = 0,
@@ -1120,6 +1136,7 @@
         );
         $("err").textContent = "";
         wordEdits = {};
+        cutWords = new Set();
         setStatus("Uploading " + file.name + "…", 2);
 
         const form = new FormData();
@@ -1232,40 +1249,111 @@
         const box = $("blocks");
         box.innerHTML = "";
         const blocks = job.reviewBlocks || [];
+        // Seed per-word cut state from the AI's block-level decision, so cut
+        // blocks start fully struck-through and keep blocks fully live.
         blocks.forEach((b) => {
-          const div = document.createElement("div");
-          div.className = "block " + b.type;
-          const tc = el(
-            "span",
-            "tc",
-            fmt(b.start) +
-              " → " +
-              fmt(b.end) +
-              (b.type === "cut" ? "  (AI cut this)" : ""),
-          );
-          const txt = el("span", "txt");
-          renderWords(txt, b.words);
-          div.append(tc, txt);
-          div.onclick = () => {
-            b.type = b.type === "keep" ? "cut" : "keep";
-            div.className = "block " + b.type;
-            tc.textContent =
-              fmt(b.start) +
-              " → " +
-              fmt(b.end) +
-              (b.type === "cut" ? "  (cut)" : "");
-            revStats(blocks);
-          };
-          box.appendChild(div);
+          if (b.type === "cut") (b.words || []).forEach((w) => cutWords.add(w.i));
         });
+        blocks.forEach((b) => box.appendChild(renderBlock(b, blocks)));
         revStats(blocks);
         $("renderBtn").onclick = () =>
-          submitRender(blocks, "Rendering your approved edit…");
+          submitRender(buildIncluded(blocks), "Rendering your approved edit…");
       }
+
+      /* A block is keep (all words live), cut (all words struck), or mixed. */
+      function blockState(b) {
+        const ws = b.words || [];
+        if (!ws.length) return b.type; // silence: whole-block only
+        const kept = ws.filter((w) => !cutWords.has(w.i)).length;
+        if (kept === 0) return "cut";
+        if (kept === ws.length) return "keep";
+        return "mixed";
+      }
+
+      /* Render one review block. Click a WORD to cut/keep just that word;
+         click anywhere else in the block to flip the whole block. */
+      function renderBlock(b, blocks) {
+        const div = document.createElement("div");
+        const tc = el("span", "tc");
+        const txt = el("span", "txt");
+        const paint = () => {
+          const st = blockState(b);
+          div.className = "block " + st;
+          tc.textContent =
+            fmt(b.start) +
+            " → " +
+            fmt(b.end) +
+            (st === "cut" ? "  (cut)" : st === "mixed" ? "  (partly cut)" : "");
+        };
+        renderWords(txt, b.words, {
+          onToggle: () => {
+            paint();
+            revStats(blocks);
+          },
+        });
+        paint();
+        div.onclick = () => {
+          const ws = b.words || [];
+          if (!ws.length) {
+            b.type = b.type === "keep" ? "cut" : "keep";
+          } else {
+            // If any word is still kept, cut the whole block; else keep it all.
+            const anyKept = ws.some((w) => !cutWords.has(w.i));
+            ws.forEach((w) =>
+              anyKept ? cutWords.add(w.i) : cutWords.delete(w.i),
+            );
+            txt.querySelectorAll(".w").forEach((sp) =>
+              sp.classList.toggle("cut", cutWords.has(+sp.dataset.i)),
+            );
+          }
+          paint();
+          revStats(blocks);
+        };
+        div.append(tc, txt);
+        return div;
+      }
+
+      /* Turn the review blocks + per-word cut state into keep-segments.
+         Runs of kept words become segments; block edges keep their padding,
+         internal cuts land on the midpoint between neighbouring words. */
+      function buildIncluded(blocks) {
+        const segs = [];
+        for (const b of blocks) {
+          const ws = b.words || [];
+          if (!ws.length) {
+            if (b.type !== "cut") segs.push({ start: b.start, end: b.end });
+            continue;
+          }
+          let run = null; // { s: firstIdx, e: lastIdx }
+          const flush = () => {
+            if (!run) return;
+            const start =
+              run.s === 0
+                ? b.start
+                : (ws[run.s - 1].e + ws[run.s].s) / 2;
+            const end =
+              run.e === ws.length - 1
+                ? b.end
+                : (ws[run.e].e + ws[run.e + 1].s) / 2;
+            segs.push({ start, end });
+            run = null;
+          };
+          ws.forEach((w, idx) => {
+            if (!cutWords.has(w.i)) {
+              if (!run) run = { s: idx, e: idx };
+              else run.e = idx;
+            } else flush();
+          });
+          flush();
+        }
+        return segs;
+      }
+
       function revStats(blocks) {
-        const kept = blocks
-          .filter((b) => b.type === "keep")
-          .reduce((s, b) => s + (b.end - b.start), 0);
+        const kept = buildIncluded(blocks).reduce(
+          (s, x) => s + (x.end - x.start),
+          0,
+        );
         $("revStats").textContent =
           "keeping " + fmt(kept) + " of " + fmt(jobDuration);
       }
@@ -1312,7 +1400,12 @@
         phSrc = 0;
         renderTl();
         $("rerenderBtn").onclick = () =>
-          submitRender(tlBlocks, "Re-rendering with your timeline changes…");
+          submitRender(
+            tlBlocks
+              .filter((b) => b.type === "keep")
+              .map((b) => ({ start: b.start, end: b.end })),
+            "Re-rendering with your timeline changes…",
+          );
         $("again").onclick = () => {
           hide("job");
           fileInput.value = "";
@@ -1600,11 +1693,10 @@
       }
 
       /* ---------- render submit ---------- */
-      async function submitRender(blocks, msg) {
-        const included = blocks
-          .filter((b) => b.type === "keep")
-          .map((b) => ({ start: b.start, end: b.end }));
-        if (!included.length) return fail("Nothing selected to keep.");
+      // `included` is a prebuilt array of { start, end } keep-segments.
+      async function submitRender(included, msg) {
+        if (!included || !included.length)
+          return fail("Nothing selected to keep.");
         hide("reviewPanel", "resultPanel");
         setStatus(msg, 45);
         const res = await fetch("/api/jobs/" + jobId + "/render", {
@@ -1713,19 +1805,39 @@
       }
 
       /* ---------- helpers ---------- */
-      function renderWords(container, words) {
+      // opts.onToggle enables per-word cutting (review step only). Without it
+      // — e.g. the timeline inspector — words only support double-click editing.
+      function renderWords(container, words, opts = {}) {
         if (!words || !words.length) {
           container.textContent = "(silence)";
           return;
         }
+        let clickTimer = null;
         words.forEach((w, k) => {
           const s = el(
             "span",
             "w" + (wordEdits[w.i] ? " edited" : ""),
             wordEdits[w.i] ?? w.w,
           );
+          s.dataset.i = w.i;
+          if (opts.onToggle) {
+            if (cutWords.has(w.i)) s.classList.add("cut");
+            // Single click = cut/keep just this word (debounced so a double
+            // click edits text instead of toggling twice).
+            s.onclick = (e) => {
+              e.stopPropagation();
+              clearTimeout(clickTimer);
+              clickTimer = setTimeout(() => {
+                if (cutWords.has(w.i)) cutWords.delete(w.i);
+                else cutWords.add(w.i);
+                s.classList.toggle("cut", cutWords.has(w.i));
+                opts.onToggle();
+              }, 200);
+            };
+          }
           s.ondblclick = (e) => {
             e.stopPropagation();
+            clearTimeout(clickTimer);
             const nv = prompt("Fix this word:", wordEdits[w.i] ?? w.w);
             if (nv !== null && nv.trim()) {
               wordEdits[w.i] = nv.trim();

@@ -471,9 +471,162 @@ async function renderJob(job, keeps) {
   // clears them when the server restarts.
 }
 
+/* ------------------------------------------------------------------ *
+ * Review-block subdivision — WORD-timestamp based, NOT Whisper segments.
+ *
+ * Whisper's transcript.segments are ASR decoder/VAD windows, not sentences:
+ * on real speech they routinely run 20–90 s and pack several sentences (or
+ * half of one) into a single block. Subdividing a keep/cut region by those
+ * boundaries therefore produces giant, un-reviewable 60–90 s blocks.
+ *
+ * Instead we walk the words in chronological order and cut at sentence
+ * punctuation (. ! ? …) or at long pauses (> 0.8 s), then normalize sizes:
+ * merge slivers (< 4 s) into a neighbour and hard-split anything over ~14 s.
+ * When punctuation is absent for a long stretch we fall back to pause-based
+ * splitting, and if a run is still too long we split roughly every 10–12 s at
+ * the nearest word boundary — so a 3–4 h podcast still yields tidy blocks.
+ *
+ * Every block is { start, end, type, words:[{i,w,s,e}] } and the blocks tile
+ * each region contiguously. Per-word start (s) / end (e) times let the review
+ * UI cut PART of a block (individual words) instead of only whole blocks.
+ * ------------------------------------------------------------------ */
+const SENTENCE_END = /[.!?…]["'”’)\]]*$/;
+const PAUSE_SPLIT = 0.8; // gap between words that reads as a sentence break
+const MIN_BLOCK = 4; // merge anything shorter into a neighbour
+const TARGET_BLOCK = 10; // aim for ~10 s review blocks
+const MAX_BLOCK = 14; // hard-split anything longer
+
+const chunkDur = (c) => c[c.length - 1].end - c[0].start;
+
 /**
- * Build alternating keep/cut blocks with their transcript text and word indices,
- * so the review UI can show exactly what the AI decided — and let the human flip it.
+ * Break a punctuation-less / pause-less word run into <= max-second pieces,
+ * preferring a natural micro-gap once we've reached the target length, and
+ * force-splitting at a word boundary before we would ever exceed max.
+ */
+function splitLongRun(ws, target = TARGET_BLOCK, max = MAX_BLOCK) {
+  const pieces = [];
+  let cur = [];
+  let startT = ws.length ? ws[0].start : 0;
+  for (let k = 0; k < ws.length; k++) {
+    cur.push(ws[k]);
+    const last = k === ws.length - 1;
+    const dur = ws[k].end - startT;
+    const gap = last ? Infinity : ws[k + 1].start - ws[k].end;
+    const nextDur = last ? dur : ws[k + 1].end - startT;
+    if (!last && ((dur >= target && gap >= 0.25) || nextDur > max)) {
+      pieces.push(cur);
+      cur = [];
+      startT = ws[k + 1].start;
+    }
+  }
+  if (cur.length) pieces.push(cur);
+  return pieces;
+}
+
+/**
+ * Merge chunks shorter than `min` into whichever neighbour keeps the result
+ * smallest without blowing past `max` where avoidable — so review never shows
+ * 1–2 s slivers.
+ */
+function mergeTinyChunks(chunks, min = MIN_BLOCK, max = MAX_BLOCK) {
+  if (chunks.length <= 1) return chunks;
+  const out = chunks.map((c) => c.slice());
+  let i = 0;
+  while (i < out.length) {
+    if (out.length === 1 || chunkDur(out[i]) >= min) {
+      i++;
+      continue;
+    }
+    const prev = out[i - 1];
+    const next = out[i + 1];
+    const prevOk = prev && chunkDur(prev) + chunkDur(out[i]) <= max;
+    const nextOk = next && chunkDur(next) + chunkDur(out[i]) <= max;
+    let mergePrev;
+    if (prevOk && nextOk) mergePrev = chunkDur(prev) <= chunkDur(next);
+    else if (prevOk) mergePrev = true;
+    else if (nextOk) mergePrev = false;
+    else mergePrev = !!prev && (!next || chunkDur(prev) <= chunkDur(next));
+    if (mergePrev && prev) {
+      prev.push(...out[i]);
+      out.splice(i, 1);
+      i = Math.max(0, i - 1);
+    } else if (next) {
+      next.unshift(...out[i]);
+      out.splice(i, 1);
+    } else {
+      i++; // truly isolated tiny chunk (whole region is short) — leave it
+    }
+  }
+  return out;
+}
+
+/**
+ * Subdivide a single keep/cut region into sentence-sized blocks from its words.
+ * Returns { sentenceCount, blocks } — blocks tile [region.start, region.end].
+ */
+function subdivideRegion(region, rWords) {
+  if (!rWords.length) {
+    // Silence / no-speech region: nothing to subdivide.
+    return {
+      sentenceCount: 0,
+      blocks: [
+        { start: region.start, end: region.end, type: region.type, words: [] },
+      ],
+    };
+  }
+
+  // 1. Sentence chunks: split on end punctuation OR a long pause.
+  const sentences = [];
+  let cur = [];
+  for (let k = 0; k < rWords.length; k++) {
+    cur.push(rWords[k]);
+    const endsSentence = SENTENCE_END.test(rWords[k].word);
+    const gap =
+      k + 1 < rWords.length ? rWords[k + 1].start - rWords[k].end : Infinity;
+    if (endsSentence || gap > PAUSE_SPLIT) {
+      sentences.push(cur);
+      cur = [];
+    }
+  }
+  if (cur.length) sentences.push(cur);
+  const sentenceCount = sentences.length;
+
+  // 2. Hard-split oversized sentences (long punctuation-less monologue).
+  let chunks = [];
+  for (const s of sentences) {
+    if (chunkDur(s) > MAX_BLOCK) chunks.push(...splitLongRun(s));
+    else chunks.push(s);
+  }
+
+  // 3. Merge slivers so we never emit 1–2 s review blocks.
+  chunks = mergeTinyChunks(chunks);
+
+  // 4. Lay chunks back over the region contiguously — boundaries fall in the
+  //    pause between chunks — so kept blocks re-merge and cut blocks stay cut.
+  const bounds = [region.start];
+  for (let k = 0; k < chunks.length - 1; k++) {
+    const leftEnd = chunks[k][chunks[k].length - 1].end;
+    const rightStart = chunks[k + 1][0].start;
+    let b = (leftEnd + rightStart) / 2;
+    if (!isFinite(b)) b = leftEnd;
+    b = Math.max(bounds[k] + 1e-3, Math.min(b, region.end - 1e-3));
+    bounds.push(b);
+  }
+  bounds.push(region.end);
+
+  const blocks = chunks.map((c, k) => ({
+    start: bounds[k],
+    end: bounds[k + 1],
+    type: region.type,
+    // s/e = per-word source times, so the UI can cut individual words.
+    words: c.map((w) => ({ i: w.i, w: w.word.trim(), s: w.start, e: w.end })),
+  }));
+  return { sentenceCount, blocks };
+}
+
+/**
+ * Build alternating keep/cut review blocks, each subdivided into sentence-sized
+ * chunks from word timestamps so the human can flip whole blocks OR single words.
  */
 function buildBlocks(keeps, words, duration) {
   const regions = [];
@@ -487,13 +640,27 @@ function buildBlocks(keeps, words, duration) {
   if (duration - cursor > 0.05)
     regions.push({ start: cursor, end: duration, type: "cut" });
 
-  return regions.map((r) => ({
-    ...r,
-    words: words
-      .map((w, i) => ({ i, w: w.word.trim(), c: (w.start + w.end) / 2 }))
-      .filter((x) => x.c >= r.start && x.c < r.end)
-      .map(({ i, w }) => ({ i, w })),
+  // Index every word once with its center time for region assignment.
+  const indexed = (words || []).map((w, i) => ({
+    i,
+    word: (w.word || "").trim(),
+    start: w.start,
+    end: w.end,
+    c: (w.start + w.end) / 2,
   }));
+
+  const out = [];
+  for (const r of regions) {
+    const rWords = indexed.filter((x) => x.c >= r.start && x.c < r.end);
+    const { sentenceCount, blocks } = subdivideRegion(r, rWords);
+    console.log({
+      regionLength: +(r.end - r.start).toFixed(1),
+      sentenceCount,
+      generatedBlocks: blocks.length,
+    });
+    out.push(...blocks);
+  }
+  return out;
 }
 
 function sanitizeSegments(list, duration) {

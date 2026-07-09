@@ -32,10 +32,37 @@ export interface ClipsSettings {
 }
 
 export interface SilenceSettings {
+  preset: "gentle" | "balanced" | "aggressive" | "custom";
   noiseDb: number;
   minSilence: number;
   padding: number;
 }
+
+// Plain-language presets that set the three raw dials under the hood. Higher
+// noiseDb (closer to 0) counts more sound as "silence" = more aggressive.
+export const SILENCE_PRESETS: Record<
+  "gentle" | "balanced" | "aggressive",
+  { noiseDb: number; minSilence: number; padding: number; blurb: string }
+> = {
+  gentle: {
+    noiseDb: -45,
+    minSilence: 1.1,
+    padding: 0.28,
+    blurb: "Only removes long, near-silent gaps. Safest — keeps natural pacing.",
+  },
+  balanced: {
+    noiseDb: -35,
+    minSilence: 0.6,
+    padding: 0.15,
+    blurb: "Removes normal pauses and dead air. Great default for most talking videos.",
+  },
+  aggressive: {
+    noiseDb: -28,
+    minSilence: 0.35,
+    padding: 0.08,
+    blurb: "Tightens hard — cuts most pauses for a fast, punchy edit.",
+  },
+};
 
 export const defaultAi: AiSettings = {
   instruction: "",
@@ -68,6 +95,7 @@ export const defaultClips: ClipsSettings = {
 };
 
 export const defaultSilence: SilenceSettings = {
+  preset: "balanced",
   noiseDb: -35,
   minSilence: 0.6,
   padding: 0.15,

@@ -1243,6 +1243,10 @@
               (needs Detect speakers + Vertical)</label
             >
             <label class="tog"
+              ><input type="checkbox" id="enhanceAudio" /> Enhance audio
+              (denoise + level)</label
+            >
+            <label class="tog"
               ><input type="checkbox" id="punchIn" checked /> Punch-in zooms on
               cuts</label
             >
@@ -1305,6 +1309,10 @@
             <label class="tog"
               ><input type="checkbox" id="clipAutoReframe" /> Auto-reframe to
               speaker (needs Detect speakers + Vertical)</label
+            >
+            <label class="tog"
+              ><input type="checkbox" id="clipEnhanceAudio" /> Enhance audio
+              (denoise + level)</label
             >
             <label class="tog"
               ><input type="checkbox" id="clipPunchIn" checked /> Punch-in
@@ -1648,6 +1656,7 @@
           form.append("punchIn", $("clipPunchIn").checked);
           form.append("diarize", $("clipDiarize").checked);
           form.append("autoReframe", $("clipAutoReframe").checked);
+          form.append("enhanceAudio", $("clipEnhanceAudio").checked);
           form.append("review", $("clipReview").checked);
           form.append("draft", $("clipDraft").checked);
         }
@@ -1664,6 +1673,7 @@
             "draft",
             "diarize",
             "autoReframe",
+            "enhanceAudio",
           ].forEach((k) => form.append(k, $(k).checked));
           const cap = $("captionStyle").value;
           form.append("captions", cap !== "none");

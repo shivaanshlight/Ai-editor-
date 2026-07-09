@@ -1,16 +1,12 @@
 /** @type {import('next').NextConfig} */
-const API = process.env.CLIPSURGEON_API || "http://localhost:3000";
-
-// The React app runs on :3001; the Express backend (server.js) runs on :3000.
-// Every /api/* call and the media/preview/source routes are proxied to Express
-// so the browser talks to one origin and there are no CORS headaches.
+// Static export: `next build` emits a self-contained site into web/out, which
+// the Express backend (server.js) serves directly. One server, one port, no
+// second process. Every /api/* call is same-origin, so no proxy/CORS needed.
 const nextConfig = {
+  output: "export",
   reactStrictMode: true,
-  async rewrites() {
-    return [
-      { source: "/api/:path*", destination: `${API}/api/:path*` },
-    ];
-  },
+  images: { unoptimized: true },
+  trailingSlash: false,
 };
 
 module.exports = nextConfig;

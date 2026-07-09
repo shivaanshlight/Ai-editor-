@@ -292,6 +292,13 @@ async function fileFingerprint(file, duration) {
     .slice(0, 32);
 }
 
+// Serve the new edit.ai frontend (Next.js static export in web/out) as the
+// site root when it's present. It's a single-page app, so any non-API, non-file
+// GET falls back to its index.html. If web/out isn't built, we fall back to the
+// legacy public/index.html so the server still works out of the box.
+const WEB_OUT = path.join(__dirname, "web", "out");
+const HAS_WEB = fs.existsSync(path.join(WEB_OUT, "index.html"));
+if (HAS_WEB) app.use(express.static(WEB_OUT));
 app.use(express.static(path.join(__dirname, "public")));
 app.use(express.json({ limit: "10mb" }));
 
@@ -1309,6 +1316,14 @@ app.get("/api/download/:id", (req, res) => {
   res.download(file, clip ? `${slug(clip.title)}.mp4` : `${base}.v${n}.mp4`);
 });
 
+// SPA fallback: any non-API GET that didn't match a static file returns the
+// frontend's index.html, so refreshing / deep links still load the app.
+if (HAS_WEB) {
+  app.get(/^(?!\/api\/).*/, (req, res) => {
+    res.sendFile(path.join(WEB_OUT, "index.html"));
+  });
+}
+
 function clamp(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v));
 }
@@ -1331,7 +1346,12 @@ async function init() {
     }
   }
   app.listen(PORT, () => {
-    console.log(`ClipSurgeon running → http://localhost:${PORT}`);
+    console.log(`edit.ai running → http://localhost:${PORT}`);
+    console.log(
+      HAS_WEB
+        ? "Frontend: edit.ai (web/out) ✓"
+        : "Frontend: legacy public/index.html — run `npm run build` in web/ for the new UI",
+    );
     console.log(
       store.ready
         ? "Supabase: connected ✓"

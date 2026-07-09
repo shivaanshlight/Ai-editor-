@@ -37,8 +37,7 @@
         --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas,
           monospace;
       }
-      @media (prefers-color-scheme: light) {
-        :root {
+      :root[data-theme="light"] {
           --bg: #f5f6f8;
           --surface: #ffffff;
           --surface-2: #f1f3f6;
@@ -60,7 +59,6 @@
           --mix-line: rgba(207, 132, 18, 0.32);
           --shadow: 0 1px 2px rgba(16, 20, 30, 0.04),
             0 12px 30px -18px rgba(16, 20, 30, 0.22);
-        }
       }
       * {
         box-sizing: border-box;
@@ -854,15 +852,40 @@
         color: var(--faint);
         font-size: 12px;
       }
+      .navright {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .theme-btn {
+        width: 36px;
+        height: 36px;
+        border-radius: 9px;
+        border: 1px solid var(--line);
+        background: var(--surface-2);
+        color: var(--muted);
+        font-size: 17px;
+        line-height: 1;
+        cursor: pointer;
+        display: grid;
+        place-items: center;
+      }
+      .theme-btn:hover {
+        color: var(--ink);
+        border-color: var(--line-2);
+      }
     </style>
   </head>
   <body>
     <nav>
       <div class="brand"><i></i>ClipSurgeon</div>
-      <div class="seg" role="tablist">
-        <button class="on" data-mode="ai" role="tab">AI edit</button>
-        <button data-mode="clips" role="tab">Find clips</button>
-        <button data-mode="silence" role="tab">Quick cut</button>
+      <div class="navright">
+        <div class="seg" role="tablist">
+          <button class="on" data-mode="ai" role="tab">AI edit</button>
+          <button data-mode="clips" role="tab">Find clips</button>
+          <button data-mode="silence" role="tab">Quick cut</button>
+        </div>
+        <button class="theme-btn" id="themeToggle" type="button" aria-label="Toggle light or dark theme" title="Light / dark">◐</button>
       </div>
     </nav>
 
@@ -2163,6 +2186,20 @@
           sec = (s % 60).toFixed(1).padStart(4, "0");
         return m + ":" + sec;
       }
+      // Theme: default dark; remember the user's choice.
+      (function () {
+        const root = document.documentElement;
+        const saved = localStorage.getItem("cs-theme");
+        if (saved) root.setAttribute("data-theme", saved);
+        const tbtn = document.getElementById("themeToggle");
+        if (tbtn)
+          tbtn.addEventListener("click", () => {
+            const now =
+              root.getAttribute("data-theme") === "light" ? "dark" : "light";
+            root.setAttribute("data-theme", now);
+            localStorage.setItem("cs-theme", now);
+          });
+      })();
     </script>
   </body>
 </html>

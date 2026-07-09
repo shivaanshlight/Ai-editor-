@@ -35,6 +35,7 @@ const {
   removeFillers,
   shrinkPauses,
   detectChapters,
+  repurpose,
 } = require("./lib/ai");
 const {
   extractAudio,
@@ -541,6 +542,31 @@ function textInRange(words, start, end) {
     .filter((w) => w.start >= start && w.end <= end)
     .map((w) => w.word.trim())
     .join(" ");
+}
+
+/**
+ * Rebuild sentence-ish transcript lines from word timestamps, so the
+ * repurposing pack works from `job.words` alone (no dependency on Whisper's
+ * stored segments). Breaks on end punctuation or a >0.8 s pause, ~30 words max.
+ */
+function wordsToLines(words) {
+  const lines = [];
+  let cur = [];
+  let startT = null;
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (startT === null) startT = w.start;
+    cur.push(w.word.trim());
+    const endsSentence = /[.!?…]["'”’)\]]*$/.test(w.word.trim());
+    const gap = i + 1 < words.length ? words[i + 1].start - w.end : Infinity;
+    if (endsSentence || gap > 0.8 || cur.length >= 30 || i === words.length - 1) {
+      const text = cur.join(" ").trim();
+      if (text) lines.push({ start: startT, end: w.end, text });
+      cur = [];
+      startT = null;
+    }
+  }
+  return lines;
 }
 
 /** Render each selected clip through the full polish pipeline. */
@@ -1182,6 +1208,52 @@ app.get("/api/jobs/:id/search", async (req, res) => {
     res.json({ results: [], error: e.message });
   }
 });
+
+/**
+ * Repurposing pack: titles, description, tags, show-notes summary, pull-quotes
+ * and per-platform social captions built from the transcript. Generated on
+ * demand (cheap, text-only, off the render path) and cached on the job.
+ * Also returns chapter timestamp lines ready to paste into a YouTube description.
+ */
+app.get("/api/jobs/:id/repurpose", async (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found." });
+  if (!process.env.GROQ_API_KEY)
+    return res.status(400).json({ error: "AI is off — add GROQ_API_KEY to .env." });
+
+  const chapterLines = (job.chapters || []).map((c) => ({
+    t: fmtTimestamp(c.start),
+    title: c.title,
+  }));
+
+  if (req.query.refresh !== "1" && job.repurpose)
+    return res.json({ pack: job.repurpose, chapters: chapterLines });
+
+  try {
+    await ensureWords(job);
+    if (!job.words || !job.words.length)
+      return res.status(400).json({ error: "No transcript for this video yet." });
+    const pack = await repurpose(
+      { segments: wordsToLines(job.words) },
+      { title: job.originalName, duration: job.duration, chapters: job.chapters },
+    );
+    job.repurpose = pack;
+    saveJob(job);
+    res.json({ pack, chapters: chapterLines });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/** Seconds → YouTube-chapter timestamp (m:ss, or h:mm:ss past an hour). */
+function fmtTimestamp(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
 
 /** Stream the ORIGINAL upload (range-enabled) so the clip editor can scrub the
  *  un-rendered ±2 min padding around a clip. */

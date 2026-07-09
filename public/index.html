@@ -393,6 +393,108 @@
       .note:empty {
         display: none;
       }
+
+      /* ---------- content kit (repurpose) ---------- */
+      #repurposePanel {
+        display: none;
+        margin-top: 22px;
+        border-top: 1px solid var(--line);
+        padding-top: 20px;
+      }
+      .kit-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        flex-wrap: wrap;
+      }
+      .kit-head h3 {
+        margin: 0;
+        font-size: 16px;
+      }
+      .kit-sec {
+        border: 1px solid var(--line);
+        border-radius: var(--r);
+        background: var(--surface-2);
+        margin-top: 12px;
+        overflow: hidden;
+      }
+      .kit-sec > .kit-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 12px;
+        font-weight: 600;
+        font-size: 13.5px;
+      }
+      .kit-sec .kit-body {
+        padding: 0 12px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .kit-item {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 9px 10px;
+      }
+      .kit-item .txt {
+        flex: 1;
+        white-space: pre-wrap;
+        line-height: 1.55;
+        font-size: 13.5px;
+        color: var(--ink);
+      }
+      .kit-item .txt.muted {
+        color: var(--muted);
+      }
+      .kit-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .kit-tag {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+      .copybtn {
+        flex: none;
+        cursor: pointer;
+        background: transparent;
+        border: 1px solid var(--line-2);
+        color: var(--muted);
+        border-radius: 6px;
+        padding: 3px 9px;
+        font-size: 12px;
+        font-weight: 600;
+        transition: 0.15s;
+      }
+      .copybtn:hover {
+        color: var(--accent);
+        border-color: var(--accent);
+      }
+      .copybtn.done {
+        color: var(--keep);
+        border-color: var(--keep-line);
+      }
+      .kit-empty {
+        color: var(--faint);
+        font-size: 13px;
+      }
+      .err-inline {
+        color: var(--cut);
+        font-size: 13px;
+        margin: 8px 0 0;
+      }
       .rev-head {
         display: flex;
         justify-content: space-between;
@@ -1381,6 +1483,20 @@
           </div>
         </div>
 
+        <div id="repurposePanel">
+          <div class="kit-head">
+            <div>
+              <h3>Content kit</h3>
+              <p class="note">
+                Titles, description, tags, chapters, pull-quotes & ready-to-post
+                social captions — written from your transcript.
+              </p>
+            </div>
+            <button class="btn primary" id="genRepurpose">Generate kit</button>
+          </div>
+          <div id="repurposeOut"></div>
+        </div>
+
         <div class="err" id="err"></div>
       </section>
     </main>
@@ -1627,7 +1743,7 @@
 
       /* ---------- review ---------- */
       function showReview(job) {
-        hide("resultPanel");
+        hide("resultPanel", "repurposePanel");
         show("reviewPanel");
         jobDuration = job.duration;
         $("revSummary").textContent = job.summary
@@ -1847,6 +1963,7 @@
           fileInput.value = "";
           window.scrollTo({ top: 0, behavior: "smooth" });
         };
+        setupRepurpose(job);
       }
       function renderVersions(versions) {
         const row = $("versions");
@@ -2229,7 +2346,13 @@
 
       /* ---------- clips ---------- */
       function showClipReview(job) {
-        hide("reviewPanel", "resultPanel", "transcriptPanel", "clipsResultPanel");
+        hide(
+          "reviewPanel",
+          "resultPanel",
+          "transcriptPanel",
+          "clipsResultPanel",
+          "repurposePanel",
+        );
         show("clipReviewPanel");
         lastClipJob = job;
         jobDuration = job.duration;
@@ -2434,6 +2557,186 @@
           fileInput.value = "";
           window.scrollTo({ top: 0, behavior: "smooth" });
         };
+        setupRepurpose(job);
+      }
+
+      /* ---------- content kit (repurpose) ---------- */
+      let kitJobId = null;
+      function setupRepurpose(job) {
+        // Only meaningful for transcript-backed modes.
+        if (job.mode !== "ai" && job.mode !== "clips") {
+          hide("repurposePanel");
+          return;
+        }
+        show("repurposePanel");
+        const btn = $("genRepurpose");
+        // Re-render the cached kit if we already made one for this job.
+        if (kitJobId === job.id && lastKit) {
+          renderKit(lastKit.pack, lastKit.chapters);
+          btn.textContent = "Regenerate";
+        } else {
+          $("repurposeOut").innerHTML = "";
+          btn.textContent = "Generate kit";
+        }
+        btn.onclick = () => genRepurpose(job.id);
+      }
+
+      let lastKit = null;
+      async function genRepurpose(id) {
+        const btn = $("genRepurpose");
+        const out = $("repurposeOut");
+        btn.disabled = true;
+        const was = btn.textContent;
+        btn.textContent = "Writing…";
+        out.innerHTML =
+          '<p class="note">Reading the transcript and writing your kit — this can take a minute on long videos…</p>';
+        try {
+          const r = await fetch(
+            "/api/jobs/" + id + "/repurpose" + (lastKit && kitJobId === id ? "?refresh=1" : ""),
+          );
+          const data = await r.json();
+          if (!r.ok || data.error) throw new Error(data.error || "Failed.");
+          kitJobId = id;
+          lastKit = { pack: data.pack, chapters: data.chapters || [] };
+          renderKit(data.pack, data.chapters || []);
+          btn.textContent = "Regenerate";
+        } catch (e) {
+          out.innerHTML = '<p class="err-inline"></p>';
+          out.querySelector(".err-inline").textContent =
+            "Couldn't generate the kit: " + e.message;
+          btn.textContent = was;
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      function copyText(str, btn) {
+        navigator.clipboard.writeText(str).then(() => {
+          const t = btn.textContent;
+          btn.textContent = "Copied";
+          btn.classList.add("done");
+          setTimeout(() => {
+            btn.textContent = t;
+            btn.classList.remove("done");
+          }, 1400);
+        });
+      }
+
+      // One collapsible section with a header + copy-all button.
+      function kitSection(title, allText, bodyNode) {
+        const sec = el("div", "kit-sec");
+        const bar = el("div", "kit-bar");
+        bar.append(el("span", "", title));
+        if (allText) {
+          const cp = el("button", "copybtn", "Copy all");
+          cp.onclick = () => copyText(allText, cp);
+          bar.append(cp);
+        }
+        const body = el("div", "kit-body");
+        body.append(bodyNode);
+        sec.append(bar, body);
+        return sec;
+      }
+
+      // A single line/paragraph item with its own copy button.
+      function kitItem(text, muted) {
+        const it = el("div", "kit-item");
+        const t = el("span", "txt" + (muted ? " muted" : ""), text);
+        const cp = el("button", "copybtn", "Copy");
+        cp.onclick = () => copyText(text, cp);
+        it.append(t, cp);
+        return it;
+      }
+
+      function renderKit(pack, chapters) {
+        const out = $("repurposeOut");
+        out.innerHTML = "";
+        if (!pack) {
+          out.innerHTML = '<p class="kit-empty">Nothing generated.</p>';
+          return;
+        }
+
+        // Titles — pick your favourite.
+        if (pack.titles?.length) {
+          const body = document.createDocumentFragment();
+          pack.titles.forEach((t) => body.append(kitItem(t)));
+          out.append(kitSection("Title ideas", pack.titles.join("\n"), body));
+        }
+
+        // Summary / show notes.
+        if (pack.summary)
+          out.append(
+            kitSection("Summary", pack.summary, kitItem(pack.summary, true)),
+          );
+
+        // Chapters (YouTube timestamp lines) — always start at 0:00.
+        if (chapters?.length) {
+          const lines = chapters.map((c) => c.t + " " + c.title);
+          if (lines[0] && !lines[0].startsWith("0:00"))
+            lines.unshift("0:00 Intro");
+          const body = el("div", "");
+          const pre = el("div", "txt", lines.join("\n"));
+          body.append(pre);
+          out.append(kitSection("Chapters", lines.join("\n"), body));
+        }
+
+        // Description.
+        if (pack.description) {
+          let desc = pack.description;
+          if (chapters?.length) {
+            const lines = chapters.map((c) => c.t + " " + c.title);
+            if (lines[0] && !lines[0].startsWith("0:00"))
+              lines.unshift("0:00 Intro");
+            desc += "\n\nChapters:\n" + lines.join("\n");
+          }
+          out.append(
+            kitSection("YouTube description", desc, kitItem(desc, true)),
+          );
+        }
+
+        // Tags + hashtags as chips.
+        if (pack.tags?.length || pack.hashtags?.length) {
+          const wrap = el("div", "kit-tags");
+          (pack.tags || []).forEach((t) => wrap.append(el("span", "kit-tag", t)));
+          (pack.hashtags || []).forEach((t) =>
+            wrap.append(el("span", "kit-tag", t)),
+          );
+          const all = [...(pack.tags || []), ...(pack.hashtags || [])].join(", ");
+          out.append(kitSection("Tags & hashtags", all, wrap));
+        }
+
+        // Pull-quotes — good for quote cards / social.
+        if (pack.pullQuotes?.length) {
+          const body = document.createDocumentFragment();
+          pack.pullQuotes.forEach((q) => body.append(kitItem("“" + q + "”")));
+          out.append(
+            kitSection(
+              "Pull-quotes",
+              pack.pullQuotes.map((q) => "“" + q + "”").join("\n"),
+              body,
+            ),
+          );
+        }
+
+        // Social posts.
+        const social = document.createDocumentFragment();
+        if (pack.tweet) social.append(kitItem(pack.tweet, true));
+        if (pack.thread?.length)
+          pack.thread.forEach((t, i) => social.append(kitItem(i + 1 + "/ " + t, true)));
+        if (pack.tweet || pack.thread?.length) {
+          const allX = [pack.tweet, ...(pack.thread || [])]
+            .filter(Boolean)
+            .join("\n\n");
+          out.append(kitSection("X / Twitter", allX, social));
+        }
+        if (pack.linkedin)
+          out.append(
+            kitSection("LinkedIn", pack.linkedin, kitItem(pack.linkedin, true)),
+          );
+        if (pack.instagram)
+          out.append(
+            kitSection("Instagram", pack.instagram, kitItem(pack.instagram, true)),
+          );
       }
 
       /* ---------- helpers ---------- */

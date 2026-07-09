@@ -36,6 +36,8 @@ const {
   shrinkPauses,
   detectChapters,
   repurpose,
+  findHighlights,
+  answerQuestion,
 } = require("./lib/ai");
 const {
   extractAudio,
@@ -43,6 +45,7 @@ const {
   extractAudioChunked,
   buildSrt,
   buildAss,
+  buildLowerThirds,
   CAPTION_STYLES,
 } = require("./lib/media");
 const store = require("./lib/supabase");
@@ -292,6 +295,13 @@ async function fileFingerprint(file, duration) {
     .slice(0, 32);
 }
 
+// Serve the new edit.ai frontend (Next.js static export in web/out) as the
+// site root when it's present. It's a single-page app, so any non-API, non-file
+// GET falls back to its index.html. If web/out isn't built, we fall back to the
+// legacy public/index.html so the server still works out of the box.
+const WEB_OUT = path.join(__dirname, "web", "out");
+const HAS_WEB = fs.existsSync(path.join(WEB_OUT, "index.html"));
+if (HAS_WEB) app.use(express.static(WEB_OUT));
 app.use(express.static(path.join(__dirname, "public")));
 app.use(express.json({ limit: "10mb" }));
 
@@ -311,7 +321,9 @@ app.post(
     const b = req.body;
     const job = {
       id,
-      mode: ["ai", "clips", "silence"].includes(b.mode) ? b.mode : "silence",
+      mode: ["ai", "clips", "silence", "highlights"].includes(b.mode)
+        ? b.mode
+        : "silence",
       status: "analyzing",
       progress: 0,
       input: video.path,
@@ -486,16 +498,27 @@ async function processJob(job) {
     );
   }
 
-  const plan = await planEdit(
-    transcript,
-    s.instruction,
-    s.targetDuration,
-    meta.duration,
-    (i, n) => {
-      job.stage = n > 1 ? `planning the edit — part ${i + 1} of ${n}` : "";
-      job.progress = Math.round((i / n) * 100);
-    },
-  );
+  const plan =
+    job.mode === "highlights"
+      ? await findHighlights(
+          transcript,
+          { targetDuration: s.targetDuration },
+          meta.duration,
+          (i, n) => {
+            job.stage = n > 1 ? `finding highlights — part ${i + 1} of ${n}` : "";
+            job.progress = Math.round((i / n) * 100);
+          },
+        )
+      : await planEdit(
+          transcript,
+          s.instruction,
+          s.targetDuration,
+          meta.duration,
+          (i, n) => {
+            job.stage = n > 1 ? `planning the edit — part ${i + 1} of ${n}` : "";
+            job.progress = Math.round((i / n) * 100);
+          },
+        );
   const keeps = validateEdl(plan.segments, meta.duration, job.words);
   job.summary = plan.summary || "";
   job.planStats = computePlanStats(job, keeps, meta.duration);
@@ -661,7 +684,9 @@ async function renderJob(job, keeps) {
   job.version = (job.version || 0) + 1;
   job.output = path.join(OUTPUT_DIR, `${job.id}.v${job.version}.mp4`);
 
-  if (job.mode === "ai") {
+  // Highlights is an edit mode too — it gets the same polish as AI edit.
+  const edit = job.mode === "ai" || job.mode === "highlights";
+  if (edit) {
     if (s.fillerRemoval) keeps = removeFillers(keeps, job.words);
     if (s.shrinkPauses) keeps = shrinkPauses(keeps, job.words);
   }
@@ -670,8 +695,8 @@ async function renderJob(job, keeps) {
   // Soft captions ship as a selectable SRT track (mov_text) — no burn-in; the
   // viewer can toggle them, and they never touch the video pixels. Karaoke ASS
   // can't be a soft track, so soft mode always uses plain SRT.
-  const soft = job.mode === "ai" && s.captions && s.softCaptions;
-  if (job.mode === "ai" && s.captions && !soft) {
+  const soft = edit && s.captions && s.softCaptions;
+  if (edit && s.captions && !soft) {
     if (s.captionStyle === "bold")
       job.ass = buildAss(job.words, keeps, { vertical: s.vertical, width, height });
     else job.srt = buildSrt(job.words, keeps);
@@ -685,7 +710,7 @@ async function renderJob(job, keeps) {
   let renderSegs = keeps;
   let reframe = null;
   if (
-    job.mode === "ai" &&
+    edit &&
     s.vertical &&
     s.autoReframe &&
     (job.speakers || []).length &&
@@ -699,7 +724,7 @@ async function renderJob(job, keeps) {
   job.status = "cutting";
   let subFile = null; // burned-in subtitle file (filtered into the video)
   let softSubFile = null; // muxed subtitle track (mov_text)
-  if (job.mode === "ai" && s.captions) {
+  if (edit && s.captions) {
     if (soft) {
       const srt = buildSrt(job.words, keeps);
       if (srt) {
@@ -714,6 +739,26 @@ async function renderJob(job, keeps) {
       fs.writeFileSync(path.join(OUTPUT_DIR, subFile), job.srt);
     }
   }
+
+  // Speaker lower-thirds: burn each named speaker's name-tag while they talk.
+  let lowerThirdFile = null;
+  if (
+    edit &&
+    job.speakerNames &&
+    Object.keys(job.speakerNames).length &&
+    (job.speakers || []).length
+  ) {
+    const lt = buildLowerThirds(renderSegs, job.speakers, job.speakerNames, {
+      width,
+      height,
+      vertical: s.vertical,
+    });
+    if (lt) {
+      lowerThirdFile = `${job.id}.v${job.version}.lt.ass`;
+      fs.writeFileSync(path.join(OUTPUT_DIR, lowerThirdFile), lt);
+    }
+  }
+
   await cutVideo(
     path.resolve(job.input),
     path.basename(job.output),
@@ -722,21 +767,19 @@ async function renderJob(job, keeps) {
       job.progress = Math.min(99, Math.round((sec / job.keptDuration) * 100));
     },
     {
-      punchIn: job.mode === "ai" && s.punchIn,
+      punchIn: edit && s.punchIn,
       width,
       height,
       draft: s.draft,
       subFile,
       softSubFile,
+      lowerThirdFile,
       subStyle: s.captionStyle === "clean" ? CAPTION_STYLES.clean : null,
-      vertical: job.mode === "ai" && s.vertical,
+      vertical: edit && s.vertical,
       reframe,
       framing:
-        job.mode === "ai" && s.punchIn && !reframe
-          ? planFraming(renderSegs, job.speakers)
-          : null,
-      musicPath:
-        job.mode === "ai" && s.musicPath ? path.resolve(s.musicPath) : null,
+        edit && s.punchIn && !reframe ? planFraming(renderSegs, job.speakers) : null,
+      musicPath: edit && s.musicPath ? path.resolve(s.musicPath) : null,
       musicVol: s.musicVol,
       enhanceAudio: s.enhanceAudio,
       cwd: OUTPUT_DIR,
@@ -744,6 +787,7 @@ async function renderJob(job, keeps) {
   );
   if (subFile) fs.unlink(path.join(OUTPUT_DIR, subFile), () => {});
   if (softSubFile) fs.unlink(path.join(OUTPUT_DIR, softSubFile), () => {});
+  if (lowerThirdFile) fs.unlink(path.join(OUTPUT_DIR, lowerThirdFile), () => {});
 
   job.status = "done";
   job.progress = 100;
@@ -992,9 +1036,44 @@ app.post("/api/jobs/:id/render", async (req, res) => {
       job.words[idx].word = text;
   }
 
+  // Speaker names (speaker label → display name) for burned-in lower-thirds.
+  if (req.body.speakerNames && typeof req.body.speakerNames === "object") {
+    const names = {};
+    for (const [k, v] of Object.entries(req.body.speakerNames))
+      if (typeof v === "string" && v.trim())
+        names[String(k)] = v.trim().slice(0, 40);
+    job.speakerNames = names;
+  }
+
   job.progress = 0;
   enqueueRender(job, () => renderJob(job, keeps));
   res.json({ ok: true });
+});
+
+/** Chat with your video: answer a question from retrieved transcript passages. */
+app.get("/api/jobs/:id/ask", async (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found." });
+  const q = String(req.query.q || "").trim();
+  if (!q) return res.json({ answer: "", citations: [] });
+  if (!process.env.GROQ_API_KEY)
+    return res.status(400).json({ error: "AI is off — add GROQ_API_KEY to .env." });
+  if (!store.ready)
+    return res.json({ answer: "", citations: [], error: "Chat needs Supabase configured." });
+  if (!job.searchReady) return res.json({ indexing: true, answer: "", citations: [] });
+  try {
+    const [vec] = await embed([q]);
+    const passages = await store.searchPassages(job.id, vec, 8);
+    if (!passages.length)
+      return res.json({ answer: "I couldn't find anything about that in this video.", citations: [] });
+    const out = await answerQuestion(
+      q,
+      passages.map((p) => ({ start: p.start_s, text: p.text })),
+    );
+    res.json(out);
+  } catch (e) {
+    res.json({ answer: "", citations: [], error: e.message });
+  }
 });
 
 /** Render ONE clip from human-adjusted source segments (the timeline editor). */
@@ -1159,6 +1238,13 @@ app.get("/api/jobs/:id", (req, res) => {
   if (status === "clipReview") payload.clipPlans = job.clipPlans;
   if (job.clips) payload.clips = job.clips;
   if (job.chapters?.length) payload.chapters = job.chapters;
+  // Distinct speaker labels (for the "name your speakers" panel) + any saved names.
+  if ((job.speakers || []).length) {
+    const labels = [];
+    for (const u of job.speakers) if (!labels.includes(u.speaker)) labels.push(u.speaker);
+    payload.speakerLabels = labels;
+    payload.speakerNames = job.speakerNames || {};
+  }
   if (status === "queued") payload.queuePos = queuePosition(job);
   res.json(payload);
 });
@@ -1309,6 +1395,14 @@ app.get("/api/download/:id", (req, res) => {
   res.download(file, clip ? `${slug(clip.title)}.mp4` : `${base}.v${n}.mp4`);
 });
 
+// SPA fallback: any non-API GET that didn't match a static file returns the
+// frontend's index.html, so refreshing / deep links still load the app.
+if (HAS_WEB) {
+  app.get(/^(?!\/api\/).*/, (req, res) => {
+    res.sendFile(path.join(WEB_OUT, "index.html"));
+  });
+}
+
 function clamp(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v));
 }
@@ -1331,7 +1425,12 @@ async function init() {
     }
   }
   app.listen(PORT, () => {
-    console.log(`ClipSurgeon running → http://localhost:${PORT}`);
+    console.log(`edit.ai running → http://localhost:${PORT}`);
+    console.log(
+      HAS_WEB
+        ? "Frontend: edit.ai (web/out) ✓"
+        : "Frontend: legacy public/index.html — run `npm run build` in web/ for the new UI",
+    );
     console.log(
       store.ready
         ? "Supabase: connected ✓"

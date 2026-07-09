@@ -973,7 +973,7 @@
           <p class="note" id="summary" style="display: none"></p>
           <video id="preview" controls playsinline></video>
           <div class="versionRow" id="versions"></div>
-          <div class="stats">
+          <div class="stats" id="statsRow">
             <div class="stat">
               <div class="n mono" id="origDur">–</div>
               <div class="l">original</div>
@@ -1362,7 +1362,12 @@
       function showResult(job) {
         hide("reviewPanel", "transcriptPanel");
         show("resultPanel");
+        // Always the full-video editor here — leave any clip-edit mode.
+        clipEdit = null;
+        setClipEditUI(false);
         jobDuration = job.duration;
+        tlOrigin = 0;
+        tlDur = job.duration;
         curVersion = job.version || 1;
         $("summary").style.display = job.summary ? "block" : "none";
         $("summary").textContent = job.summary
@@ -1442,6 +1447,7 @@
         });
       }
       function setPreview(v) {
+        $("preview").onloadedmetadata = null; // drop any clip-editor seek hook
         $("preview").src =
           "/api/preview/" + jobId + "?v=" + v + "&t=" + Date.now();
         $("download").href = "/api/download/" + jobId + "?v=" + v;
@@ -1451,11 +1457,19 @@
         phSrc = 0,
         blockEls = [],
         undoStack = [];
+      // Timeline window: main editor spans the whole video (origin 0), the clip
+      // editor spans just [clipStart-2min, clipEnd+2min].
+      let tlOrigin = 0,
+        tlDur = 0,
+        clipEdit = null,
+        wordsCache = null,
+        lastClipJob = null;
 
       function layoutTl() {
         const wrapW = $("tlWrap").clientWidth - 2;
-        pps = Math.max(14, Math.min(90, wrapW / jobDuration));
-        $("tlInner").style.width = Math.max(wrapW, jobDuration * pps) + "px";
+        const span = tlDur || jobDuration || 1;
+        pps = Math.max(14, Math.min(90, wrapW / span));
+        $("tlInner").style.width = Math.max(wrapW, span * pps) + "px";
       }
 
       function renderTl() {
@@ -1465,12 +1479,13 @@
         ruler.innerHTML = "";
         track.innerHTML = "";
         blockEls = [];
+        const span = tlDur || jobDuration;
         const step = pps >= 60 ? 1 : pps >= 28 ? 2 : pps >= 12 ? 5 : 10;
-        for (let t = 0; t <= jobDuration; t += step) {
+        for (let t = 0; t <= span; t += step) {
           const tick = el("div", "tick");
           tick.style.left = t * pps + "px";
           const lab = document.createElement("span");
-          lab.textContent = fmt(t).replace(".0", "");
+          lab.textContent = fmt(tlOrigin + t).replace(".0", "");
           tick.appendChild(lab);
           ruler.appendChild(tick);
         }
@@ -1479,7 +1494,7 @@
             "div",
             (b.type === "keep" ? "clip" : "gap") + (i === selIdx ? " sel" : ""),
           );
-          d.style.left = b.start * pps + "px";
+          d.style.left = (b.start - tlOrigin) * pps + "px";
           d.style.width = Math.max((b.end - b.start) * pps, 6) + "px";
           if (b.type === "keep") {
             const hl = el("div", "h l"),
@@ -1497,11 +1512,19 @@
 
       /* --- playhead + scrubbing (Premiere-style: click or drag anywhere) --- */
       function setPlayhead(src, seek = true) {
-        phSrc = Math.max(0, Math.min(jobDuration, src));
-        $("playhead").style.transform = "translateX(" + phSrc * pps + "px)";
+        const lo = tlOrigin,
+          hi = tlOrigin + (tlDur || jobDuration);
+        phSrc = Math.max(lo, Math.min(hi, src));
+        $("playhead").style.transform =
+          "translateX(" + (phSrc - tlOrigin) * pps + "px)";
         if (seek) {
-          const outT = srcToOut(phSrc);
-          if (outT !== null && isFinite(outT)) $("preview").currentTime = outT;
+          if (clipEdit) {
+            // Clip editor previews the ORIGINAL source: source time maps 1:1.
+            $("preview").currentTime = phSrc;
+          } else {
+            const outT = srcToOut(phSrc);
+            if (outT !== null && isFinite(outT)) $("preview").currentTime = outT;
+          }
         }
       }
       let scrubbing = false;
@@ -1510,7 +1533,7 @@
         scrubbing = true;
         $("tlInner").setPointerCapture(e.pointerId);
         const x = e.clientX - $("tlInner").getBoundingClientRect().left;
-        const src = x / pps;
+        const src = tlOrigin + x / pps;
         selIdx = tlBlocks.findIndex((b) => src >= b.start && src <= b.end);
         refreshSelection();
         setPlayhead(src);
@@ -1518,7 +1541,7 @@
       $("tlInner").addEventListener("pointermove", (e) => {
         if (!scrubbing) return;
         const x = e.clientX - $("tlInner").getBoundingClientRect().left;
-        setPlayhead(x / pps);
+        setPlayhead(tlOrigin + x / pps);
       });
       $("tlInner").addEventListener("pointerup", () => (scrubbing = false));
       $("tlInner").addEventListener("pointercancel", () => (scrubbing = false));
@@ -1554,16 +1577,17 @@
           next = tlBlocks[idx + 1];
         const dt = (e.clientX - x0) / pps,
           MIN = 0.12;
+        const tlEnd = tlOrigin + (tlDur || jobDuration);
         if (side === "l") {
           const v = Math.max(
-            prev ? prev.start + MIN : 0,
+            prev ? prev.start + MIN : tlOrigin,
             Math.min(s0 + dt, b.end - MIN),
           );
           b.start = v;
           if (prev) prev.end = v;
         } else {
           const v = Math.min(
-            next ? next.end - MIN : jobDuration,
+            next ? next.end - MIN : tlEnd,
             Math.max(e0 + dt, b.start + MIN),
           );
           b.end = v;
@@ -1572,7 +1596,7 @@
         // Direct style updates — never rebuild mid-drag, or pointer capture dies.
         for (const i of [idx - 1, idx, idx + 1]) {
           if (blockEls[i] && tlBlocks[i]) {
-            blockEls[i].style.left = tlBlocks[i].start * pps + "px";
+            blockEls[i].style.left = (tlBlocks[i].start - tlOrigin) * pps + "px";
             blockEls[i].style.width =
               Math.max((tlBlocks[i].end - tlBlocks[i].start) * pps, 6) + "px";
           }
@@ -1668,9 +1692,15 @@
         return null;
       }
       $("preview").addEventListener("timeupdate", () => {
-        if (!versionSegs.length || scrubbing) return;
-        phSrc = outToSrc($("preview").currentTime);
-        $("playhead").style.transform = "translateX(" + phSrc * pps + "px)";
+        if (scrubbing) return;
+        if (clipEdit) {
+          phSrc = $("preview").currentTime; // source previewed 1:1
+        } else {
+          if (!versionSegs.length) return;
+          phSrc = outToSrc($("preview").currentTime);
+        }
+        $("playhead").style.transform =
+          "translateX(" + (phSrc - tlOrigin) * pps + "px)";
       });
       window.addEventListener("resize", () => {
         if ($("resultPanel").style.display === "block") renderTl();
@@ -1713,8 +1743,10 @@
 
       /* ---------- clips ---------- */
       function showClipReview(job) {
-        hide("reviewPanel", "resultPanel", "transcriptPanel");
+        hide("reviewPanel", "resultPanel", "transcriptPanel", "clipsResultPanel");
         show("clipReviewPanel");
+        lastClipJob = job;
+        jobDuration = job.duration;
         const list = $("clipList");
         list.innerHTML = "";
         (job.clipPlans || []).forEach((c) => {
@@ -1736,7 +1768,15 @@
               "s",
           );
           const p = el("p", "", (c.text || "") + "…");
-          body.append(t, meta, p);
+          const edit = el("button", "btn sm", "✎ Edit in timeline");
+          edit.type = "button";
+          edit.style.marginTop = "6px";
+          edit.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            editClip(c);
+          };
+          body.append(t, meta, p, edit);
           row.append(cb, body);
           list.appendChild(row);
         });
@@ -1758,6 +1798,108 @@
           }
           poll();
         };
+      }
+
+      /* Toggle the shared result panel between full-video mode and clip-edit mode. */
+      function setClipEditUI(on) {
+        $("versions").style.display = on ? "none" : "";
+        const stats = $("statsRow");
+        if (stats) stats.style.display = on ? "none" : "";
+        $("download").style.display = on ? "none" : "";
+        $("rerenderBtn").textContent = on
+          ? "Render this clip"
+          : "Re-render with changes";
+        $("again").textContent = on ? "← Back to clips" : "New video";
+        if (!on) $("summary").style.display = "none";
+      }
+
+      /* Open a clip in the timeline editor, windowed to ±2 min around it. The
+         clip is the keep block; the pads on each side are cut context you can
+         drag the edges into (or split/keep) to extend the clip. */
+      async function editClip(c) {
+        if (!wordsCache) {
+          try {
+            wordsCache = await (
+              await fetch("/api/jobs/" + jobId + "/words")
+            ).json();
+          } catch {
+            wordsCache = [];
+          }
+        }
+        clipEdit = { i: c.i, title: c.title };
+        const padStart = c.padStart != null ? c.padStart : Math.max(0, c.start - 120);
+        const padEnd =
+          c.padEnd != null ? c.padEnd : Math.min(jobDuration, c.end + 120);
+        tlOrigin = padStart;
+        tlDur = Math.max(1, padEnd - padStart);
+
+        const regions = [];
+        if (c.start - padStart > 0.05)
+          regions.push({ start: padStart, end: c.start, type: "cut" });
+        regions.push({ start: c.start, end: c.end, type: "keep" });
+        if (padEnd - c.end > 0.05)
+          regions.push({ start: c.end, end: padEnd, type: "cut" });
+        tlBlocks = regions.map((r) => ({
+          ...r,
+          words: (wordsCache || [])
+            .filter((w) => w.s >= r.start && w.s < r.end)
+            .map((w) => ({ i: w.i, w: w.w })),
+        }));
+
+        selIdx = tlBlocks.findIndex((b) => b.type === "keep");
+        undoStack = [];
+        phSrc = c.start;
+        hide(
+          "clipReviewPanel",
+          "reviewPanel",
+          "transcriptPanel",
+          "clipsResultPanel",
+        );
+        show("resultPanel");
+        setClipEditUI(true);
+        $("summary").style.display = "block";
+        $("summary").textContent =
+          "Editing “" +
+          c.title +
+          "” — drag the clip edges (or split/delete) to extend up to 2 min either side, then render.";
+        $("preview").src = "/api/source/" + jobId + "?t=" + Date.now();
+        $("preview").onloadedmetadata = () => {
+          try {
+            $("preview").currentTime = c.start;
+          } catch {}
+        };
+        $("inspector").style.display = "none";
+        requestAnimationFrame(renderTl);
+        $("rerenderBtn").onclick = renderClipFromTimeline;
+        $("again").onclick = () => {
+          clipEdit = null;
+          setClipEditUI(false);
+          if (lastClipJob) showClipReview(lastClipJob);
+        };
+      }
+
+      async function renderClipFromTimeline() {
+        if (!clipEdit) return;
+        const segs = tlBlocks
+          .filter((b) => b.type === "keep")
+          .map((b) => ({ start: b.start, end: b.end }));
+        if (!segs.length) return fail("Nothing to keep in this clip.");
+        const i = clipEdit.i,
+          title = clipEdit.title;
+        clipEdit = null;
+        setClipEditUI(false);
+        hide("resultPanel");
+        setStatus("Rendering clip…", 45);
+        const res = await fetch("/api/jobs/" + jobId + "/render-clip", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ i, segments: segs, title }),
+        });
+        if (!res.ok) {
+          const d = await res.json();
+          return fail(d.error || "Render failed");
+        }
+        poll();
       }
 
       function showClipsResult(job) {

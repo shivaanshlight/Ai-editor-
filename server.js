@@ -291,6 +291,9 @@ async function processJob(job) {
       ...c,
       i,
       text: textInRange(job.words, c.start, c.end).slice(0, 220),
+      // ±2 min of editable context so the timeline can extend the clip either way.
+      padStart: Math.max(0, c.start - 120),
+      padEnd: Math.min(meta.duration, c.end + 120),
     }));
     if (s.review) {
       job.status = "clipReview";
@@ -710,6 +713,97 @@ app.post("/api/jobs/:id/render", (req, res) => {
   res.json({ ok: true });
 });
 
+/** Render ONE clip from human-adjusted source segments (the timeline editor). */
+app.post("/api/jobs/:id/render-clip", (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found." });
+  if (!job.meta) return res.status(400).json({ error: "Job not ready." });
+  const i = parseInt(req.body.i, 10);
+  if (!Number.isInteger(i))
+    return res.status(400).json({ error: "Bad clip index." });
+  const segs = sanitizeSegments(req.body.segments, job.meta.duration);
+  if (!segs.length)
+    return res.status(400).json({ error: "Nothing selected to keep." });
+  const plan = (job.clipPlans || []).find((c) => c.i === i);
+  const title =
+    (plan && plan.title) ||
+    String(req.body.title || "").slice(0, 80) ||
+    `Clip ${i + 1}`;
+  job.progress = 0;
+  enqueueRender(job, () => renderClipSegments(job, i, segs, title));
+  res.json({ ok: true });
+});
+
+/** Render a single clip #i from explicit keep-segments, then upsert job.clips[i]. */
+async function renderClipSegments(job, i, baseSegs, title) {
+  const s = job.settings;
+  const { duration, fps, width, height } = job.meta;
+  job.status = "cutting";
+  job.stage = `rendering clip: ${title}`;
+  job.progress = 0;
+
+  let segs = baseSegs.map((x) => ({ ...x }));
+  if (s.fillerRemoval) segs = removeFillers(segs, job.words);
+  if (s.shrinkPauses) segs = shrinkPauses(segs, job.words);
+  segs = quantizeSegments(segs, fps, duration);
+  const clipDur = segs.reduce((sum, x) => sum + (x.end - x.start), 0);
+
+  const out = path.join(OUTPUT_DIR, `${job.id}.c${i}.mp4`);
+  let subFile = null;
+  if (s.captions) {
+    if (s.captionStyle === "bold") {
+      const ass = buildAss(job.words, segs, { vertical: s.vertical });
+      if (ass) {
+        subFile = `${job.id}.c${i}.ass`;
+        fs.writeFileSync(path.join(OUTPUT_DIR, subFile), ass);
+      }
+    } else {
+      const srt = buildSrt(job.words, segs);
+      if (srt) {
+        subFile = `${job.id}.c${i}.srt`;
+        fs.writeFileSync(path.join(OUTPUT_DIR, subFile), srt);
+      }
+    }
+  }
+  await cutVideo(
+    path.resolve(job.input),
+    path.basename(out),
+    segs,
+    (sec) => {
+      job.progress = Math.min(99, Math.round((sec / Math.max(clipDur, 0.1)) * 100));
+    },
+    {
+      punchIn: s.punchIn,
+      width,
+      height,
+      draft: s.draft,
+      subFile,
+      subStyle: s.captionStyle === "clean" ? CAPTION_STYLES.clean : null,
+      vertical: s.vertical,
+      cwd: OUTPUT_DIR,
+    },
+  );
+  if (subFile) fs.unlink(path.join(OUTPUT_DIR, subFile), () => {});
+
+  job.clips = job.clips || [];
+  const entry = {
+    i,
+    title,
+    duration: clipDur,
+    start: segs[0].start,
+    end: segs[segs.length - 1].end,
+  };
+  const at = job.clips.findIndex((c) => c.i === i);
+  if (at >= 0) job.clips[at] = entry;
+  else job.clips.push(entry);
+  job.clips.sort((a, b) => a.i - b.i);
+
+  job.status = "done";
+  job.progress = 100;
+  job.stage = "";
+  saveJob(job);
+}
+
 app.post("/api/jobs/:id/render-clips", (req, res) => {
   const job = jobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: "Job not found." });
@@ -791,11 +885,37 @@ app.get("/api/jobs/:id/words", (req, res) => {
   if (!job || !job.words)
     return res.status(404).json({ error: "No transcript." });
   res.json(
-    job.words.map((w) => ({
+    job.words.map((w, i) => ({
+      i,
       w: w.word.trim(),
       s: Math.round(w.start * 10) / 10,
+      e: Math.round(w.end * 10) / 10,
     })),
   );
+});
+
+/** Stream the ORIGINAL upload (range-enabled) so the clip editor can scrub the
+ *  un-rendered ±2 min padding around a clip. */
+app.get("/api/source/:id", (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job || !job.input || !fs.existsSync(job.input))
+    return res.status(404).send("No source.");
+  const stat = fs.statSync(job.input);
+  res.setHeader("Content-Type", "video/mp4");
+  res.setHeader("Accept-Ranges", "bytes");
+  const range = req.headers.range;
+  const m = range && /bytes=(\d+)-(\d*)/.exec(range);
+  if (m) {
+    const start = parseInt(m[1], 10);
+    const end = m[2] ? parseInt(m[2], 10) : stat.size - 1;
+    res.status(206);
+    res.setHeader("Content-Range", `bytes ${start}-${end}/${stat.size}`);
+    res.setHeader("Content-Length", end - start + 1);
+    fs.createReadStream(job.input, { start, end }).pipe(res);
+  } else {
+    res.setHeader("Content-Length", stat.size);
+    fs.createReadStream(job.input).pipe(res);
+  }
 });
 
 app.get("/api/preview/:id", (req, res) => {

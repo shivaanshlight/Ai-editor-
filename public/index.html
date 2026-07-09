@@ -1007,6 +1007,17 @@
         font-size: 12.5px;
         padding: 6px 2px;
       }
+      .zoomctl {
+        display: inline-flex;
+        gap: 4px;
+        border-left: 1px solid var(--line);
+        padding-left: 8px;
+        margin-left: 2px;
+      }
+      .zoomctl .btn.sm {
+        padding: 7px 11px;
+        min-width: 34px;
+      }
     </style>
   </head>
   <body>
@@ -1320,8 +1331,14 @@
             <button class="btn sm" id="splitBtn">✂ Split at playhead</button>
             <button class="btn sm" id="delBtn">Delete segment</button>
             <button class="btn sm" id="undoBtn">Undo</button>
+            <span class="zoomctl">
+              <button class="btn sm" id="zoomOut" title="Zoom out">−</button>
+              <button class="btn sm" id="zoomFit" title="Fit whole video">Fit</button>
+              <button class="btn sm" id="zoomIn" title="Zoom in">＋</button>
+            </span>
             <span class="hintk"
-              >shortcuts: S = split · Del = delete/restore</span
+              >S = split · Del = delete/restore · ← → select · Ctrl+scroll to
+              zoom</span
             >
           </div>
           <div id="inspector">
@@ -1744,6 +1761,7 @@
         jobDuration = job.duration;
         tlOrigin = 0;
         tlDur = job.duration;
+        tlZoom = 1;
         curVersion = job.version || 1;
         $("summary").style.display = job.summary ? "block" : "none";
         $("summary").textContent = job.summary
@@ -1837,6 +1855,7 @@
       // editor spans just [clipStart-2min, clipEnd+2min].
       let tlOrigin = 0,
         tlDur = 0,
+        tlZoom = 1,
         clipEdit = null,
         wordsCache = null,
         lastClipJob = null;
@@ -1844,8 +1863,26 @@
       function layoutTl() {
         const wrapW = $("tlWrap").clientWidth - 2;
         const span = tlDur || jobDuration || 1;
-        pps = Math.max(14, Math.min(90, wrapW / span));
+        // Base fit-to-width, then a user zoom multiplier so small segments can
+        // be spread out and clicked/trimmed comfortably.
+        const base = Math.max(14, Math.min(90, wrapW / span));
+        pps = base * tlZoom;
         $("tlInner").style.width = Math.max(wrapW, span * pps) + "px";
+      }
+
+      /* Zoom keeping `anchorSrc` (defaults to playhead) fixed on screen. */
+      function setZoom(z, anchorSrc) {
+        const wrap = $("tlWrap");
+        const oldPps = pps;
+        const anchor = anchorSrc != null ? anchorSrc : phSrc;
+        const screenX = (anchor - tlOrigin) * oldPps - wrap.scrollLeft;
+        tlZoom = Math.max(1, Math.min(60, z));
+        renderTl();
+        wrap.scrollLeft = Math.max(0, (anchor - tlOrigin) * pps - screenX);
+      }
+      function scrollSegIntoView(i) {
+        const el = blockEls[i];
+        if (el) el.scrollIntoView({ inline: "center", block: "nearest" });
       }
 
       function renderTl() {
@@ -1871,7 +1908,7 @@
             (b.type === "keep" ? "clip" : "gap") + (i === selIdx ? " sel" : ""),
           );
           d.style.left = (b.start - tlOrigin) * pps + "px";
-          d.style.width = Math.max((b.end - b.start) * pps, 6) + "px";
+          d.style.width = Math.max((b.end - b.start) * pps, 9) + "px";
           if (b.type === "keep") {
             const hl = el("div", "h l"),
               hr = el("div", "h r");
@@ -1974,7 +2011,7 @@
           if (blockEls[i] && tlBlocks[i]) {
             blockEls[i].style.left = (tlBlocks[i].start - tlOrigin) * pps + "px";
             blockEls[i].style.width =
-              Math.max((tlBlocks[i].end - tlBlocks[i].start) * pps, 6) + "px";
+              Math.max((tlBlocks[i].end - tlBlocks[i].start) * pps, 9) + "px";
           }
         }
         if (idx === selIdx) renderInspector();
@@ -2029,6 +2066,20 @@
         renderTl();
         refreshSelection();
       };
+      /* Select the previous / next segment — the reliable way to grab tiny
+         segments without hunting for them with the mouse. */
+      function selectSeg(delta) {
+        if (!tlBlocks.length) return;
+        selIdx =
+          selIdx < 0
+            ? delta > 0
+              ? 0
+              : tlBlocks.length - 1
+            : Math.max(0, Math.min(tlBlocks.length - 1, selIdx + delta));
+        refreshSelection();
+        setPlayhead(tlBlocks[selIdx].start);
+        scrollSegIntoView(selIdx);
+      }
       document.addEventListener("keydown", (e) => {
         if ($("resultPanel").style.display !== "block") return;
         if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")
@@ -2038,8 +2089,30 @@
           e.preventDefault();
           $("delBtn").click();
         }
+        if (e.key === "ArrowRight") {
+          e.preventDefault();
+          selectSeg(1);
+        }
+        if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          selectSeg(-1);
+        }
         if ((e.ctrlKey || e.metaKey) && e.key === "z") $("undoBtn").click();
       });
+      $("zoomIn").onclick = () => setZoom(tlZoom * 1.6);
+      $("zoomOut").onclick = () => setZoom(tlZoom / 1.6);
+      $("zoomFit").onclick = () => setZoom(1);
+      $("tlInner").addEventListener(
+        "wheel",
+        (e) => {
+          if (!e.ctrlKey && !e.metaKey) return; // plain wheel still scrolls
+          e.preventDefault();
+          const rect = $("tlInner").getBoundingClientRect();
+          const src = tlOrigin + (e.clientX - rect.left) / pps;
+          setZoom(tlZoom * (e.deltaY < 0 ? 1.25 : 1 / 1.25), src);
+        },
+        { passive: false },
+      );
       function updateToolbar() {
         const b = tlBlocks[selIdx];
         $("delBtn").textContent =
@@ -2208,6 +2281,7 @@
           c.padEnd != null ? c.padEnd : Math.min(jobDuration, c.end + 120);
         tlOrigin = padStart;
         tlDur = Math.max(1, padEnd - padStart);
+        tlZoom = 1;
 
         const regions = [];
         if (c.start - padStart > 0.05)

@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Mode, ClipPlan, Segment } from "@/lib/types";
 import { useJob } from "@/lib/useJob";
 import {
@@ -27,7 +27,8 @@ import ClipsConfig from "@/components/ClipsConfig";
 import SilenceConfig from "@/components/SilenceConfig";
 import HighlightsConfig from "@/components/HighlightsConfig";
 import Progress from "@/components/Progress";
-import Review from "@/components/Review";
+import Workspace from "@/components/Workspace";
+import { demoJob } from "@/lib/workspace";
 import ClipReview from "@/components/ClipReview";
 import ClipEditor from "@/components/ClipEditor";
 import ClipsResult from "@/components/ClipsResult";
@@ -65,6 +66,12 @@ type PerMode<T> = Record<Mode, T>;
 
 export default function Page() {
   const [mode, setMode] = useState<Mode>("ai");
+  // #demo renders the Workspace with fixture data — used for design review and
+  // headless verification without a backend.
+  const [demo, setDemo] = useState(false);
+  useEffect(() => {
+    setDemo(window.location.hash === "#demo");
+  }, []);
 
   // Each mode owns its own job + editor state, so switching tabs never loses an
   // in-flight render and one mode's result never appears under another.
@@ -158,6 +165,17 @@ export default function Page() {
 
   const showSetup = !activeJobId || (job && job.status === "error");
 
+  if (demo) {
+    return (
+      <>
+        <Nav mode={mode} onMode={switchMode} />
+        <main className="mx-auto max-w-[1240px] px-5 pb-16 pt-4">
+          <Workspace job={demoJob()} onRender={() => {}} />
+        </main>
+      </>
+    );
+  }
+
   return (
     <>
       <Nav mode={mode} onMode={switchMode} />
@@ -194,7 +212,7 @@ export default function Page() {
             {job && PROCESSING.has(job.status) && <Progress job={job} />}
 
             {job && job.status === "review" && (
-              <Review job={job} onRender={onReviewRender} />
+              <Workspace job={job} onRender={onReviewRender} />
             )}
 
             {job && job.status === "clipReview" &&

@@ -88,6 +88,9 @@ Extract, before any LLM call:
 - **Disfluency flags** — filler, false starts ("wait, let me redo that"), near-duplicate retakes
   (fuzzy text match between adjacent passages).
 - **Scene cuts** — ffmpeg scene-change timestamps; a cut boundary must never land mid-shot.
+- **Audio-quality (SNR)** — per-unit signal-to-noise / RMS from ffmpeg `astats`. Flag noisy,
+  distorted, or very-low-level units as **`lowQuality`** — surfaced to the user (not auto-cut),
+  and never chosen as the hook. *(Added from the external review.)*
 - **Chapters/topics** — already built.
 
 **Why:** the brain must decide on *data, not vibes*. This is the cheap "ears" — and every
@@ -95,8 +98,8 @@ guard in S4 keys off these signals. All local, all free, cached by content hash.
 
 **Contract:**
 ```json
-Unit { "id", "start", "end", "text", "speaker?", "energy": 0-1,
-       "pauseBefore", "pauseAfter", "flags": ["filler"|"falseStart"|"retake"],
+Unit { "id", "start", "end", "text", "speaker?", "energy": 0-1, "snr": 0-1,
+       "pauseBefore", "pauseAfter", "flags": ["filler"|"falseStart"|"retake"|"lowQuality"],
        "chapter", "sceneSafe": true }
 ```
 
@@ -126,7 +129,9 @@ outline-then-score fallback on Groq):
 - **Derived confidence, never self-reported.** LLM self-confidence is decoratively
   miscalibrated (clusters at ~0.95 regardless of correctness). Instead: run the cheap scorer
   **3× at temperature** and use *agreement* (variance) as uncertainty, cross-checked against
-  the deterministic S0 signals. **Disagreement ⇒ keep** (restraint).
+  the deterministic S0 signals. **Disagreement ⇒ keep** (restraint). The three runs are
+  **independent → fired in parallel**, not in series, so consistency costs latency of one call,
+  not three. *(Parallelism flagged by the external review.)*
 - **Verbosity-bias correction** — length-normalize scores so long segments don't win by default.
 - Scores are cached per content-hash; re-editing with a new threshold costs **zero** LLM calls.
 
@@ -187,9 +192,12 @@ concrete findings:
 | **Rhythm violations** | Cuts/min over budget; keeps shorter than a phrase; boundaries not in silence |
 | **Structure checks** | Hook present in first N seconds; ending is a closing-type line; no mid-shot cuts |
 
-The **repair pass** then feeds *those specific findings* (not "does it flow?") back to the
-model: "Finding: unit #41 opens with an orphaned 'that's why' — restore its antecedent or cut
-#41." Targeted correction with external evidence — the one regime where a second pass provably helps.
+**Flag first, repair only when safe.** The findings are *always* surfaced in the review UI
+(highlighted on the offending unit) — the linter's value is detection, and auto-repair can
+hallucinate a bad restoration. Automated repair runs **only** for the trivial, high-agreement
+case (e.g. simply cut the orphaned opener, or restore a single locked antecedent) — anything
+ambiguous is handed to the human, not fixed silently. *(This flag-don't-auto-repair stance was
+sharpened by the external review, and matches the self-correction research in §4.)*
 
 ### S6 — Human review  `[exists · upgraded]`
 
@@ -251,6 +259,20 @@ Scoring at temperature 0 (the ×3 consistency runs at 0.7 are separate), prompt 
 pinned and logged with each EDL, and the EDL itself stored as the artifact — the same
 approved EDL always renders the same video.
 
+### 4.6 Decision-layer history (undo for *decisions*, not just renders)  *(from the external review)*
+
+Today we version rendered *outputs*. We do **not** track the *decision state* — slider position,
+locks, manual keep/cut flips, boundary drags. Snapshot the user-modified EDL + locks + threshold
+per edit session as simple JSON so a user can step back to a previous decision state (Ctrl+Z at
+the edit level, and "revert to the AI's original plan"). Cheap, local, high-trust.
+
+### 4.7 Multi-language (Phase 2)  *(from the external review)*
+
+The pipeline is English-only today (Whisper). The Indian market needs Hindi, Tamil, and more.
+Only the **transcription model** changes (multilingual/Indic Whisper); S0's audio signals and
+S2–S5's ranking/linting logic are **language-agnostic** — no architectural redesign, so this is a
+clean Phase-2 swap, not a rebuild. (The rubric prompts get localized examples per language.)
+
 ---
 
 ## 5. What the research changed (v1 → v2 corrections)
@@ -283,6 +305,10 @@ Key sources: [LLMs Cannot Self-Correct Reasoning Yet](https://arxiv.org/abs/2310
 | Re-edit (slider) | local only | ₹0 | instant, from cache |
 | **Total decision layer** | | **~₹3–5** | transcription (~₹19) still dominates |
 
+**Latency** *(review-flagged): the ×3 scoring runs fire in **parallel**, so the decision layer
+adds roughly one big-context call (~seconds), not three. Re-edits (slider moves) are instant
+from cache. Target: decision layer < ~1 min on a 2-hour video, dominated by the single scoring call.*
+
 ---
 
 ## 7. Risks & mitigations
@@ -305,8 +331,20 @@ Key sources: [LLMs Cannot Self-Correct Reasoning Yet](https://arxiv.org/abs/2310
 | **M1** | S0 Edit Context · quantile ranking + slider · derived confidence · breath-snap + speech-safe J/L · cut-rate limit · lint→repair loop | nothing | EditBench score ≥ target; your test edit shows no mid-thought cuts, no orphaned openers |
 | **M1.5** | Pairwise tournament in borderline band | nothing | Band re-ranking beats pointwise on bench borderline fixtures |
 | **M2** | Gemini big-context, structure-first (kill chunking) | free Gemini key | Coherent long-video edits; no 413/chunk artifacts |
-| **M3** | Intent brief + locks UI · filler review · report card · preference telemetry | nothing | Locked spans never cut (bench-enforced); report card renders |
+| **M3** | Intent brief + locks UI · filler review · report card · preference telemetry · **decision-layer undo (§4.6)** | nothing | Locked spans never cut (bench-enforced); report card renders; can revert to a prior decision state |
 | **M4** | Document-first editing (delete text = cut · drag to reorder) | nothing | Descript-parity core interaction |
+| **M5** | **Multi-language (§4.7)** — Indic/multilingual Whisper swap | multilingual STT | Hindi/Tamil transcript → same ranking/linting works end-to-end |
 
 **The honest goal, restated:** not autonomous perfection — a **tight, trustworthy first pass
 plus a 2-minute human polish**, with every claim about "better" backed by a bench number, not a vibe.
+
+---
+
+## Appendix — changes from external review
+
+An independent evaluation scored this architecture **8/10 ("legit, build it")**. Five of its
+catches were folded in above: **parallel ×3 scoring** (§2, §6), **audio-quality/SNR flags** (§0),
+**flag-don't-auto-repair** (§5), **decision-layer undo** (§4.6), and a **multi-language phase**
+(§4.7, M5). Deliberately *not* adopted: a *BERTScore(kept, original)* "coherence gate" — a tight
+edit is meant to diverge from the original, so text-similarity to the source is the wrong signal;
+edit coherence is measured by the deterministic linter (§5), not by resemblance to the raw video.

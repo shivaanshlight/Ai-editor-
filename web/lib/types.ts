@@ -27,6 +27,16 @@ export interface ReviewBlock {
   end: number;
   type: "keep" | "cut";
   words: BlockWord[];
+  // Optional rich signals — filled by the M1 engine (and the demo fixture).
+  // Absent on today's transcript-only jobs; the Workspace degrades gracefully.
+  score?: number; // 0–100 salience
+  reason?: string; // one-line why-kept/why-cut
+  speaker?: string; // speaker name/label
+  chapter?: string; // chapter/topic this block belongs to
+  hook?: boolean; // is the opening hook
+  closing?: boolean; // is the closing line
+  highEnergy?: boolean; // protected high-energy moment
+  payoffOf?: number; // block index this one pays off (setup → payoff)
 }
 
 export interface PlanStats {

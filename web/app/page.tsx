@@ -70,7 +70,10 @@ export default function Page() {
   // headless verification without a backend.
   const [demo, setDemo] = useState(false);
   useEffect(() => {
-    setDemo(window.location.hash === "#demo");
+    const sync = () => setDemo(window.location.hash === "#demo");
+    sync();
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
   }, []);
 
   // Each mode owns its own job + editor state, so switching tabs never loses an

@@ -498,6 +498,45 @@ async function processJob(job) {
     );
   }
 
+  // ---- M1 engine path (ai mode): segment → signals → score → decide.
+  // EDIT_ENGINE=0 disables it; any engine failure falls back to the legacy
+  // planner below, so an upload never dies on the new path.
+  if (job.mode === "ai" && process.env.EDIT_ENGINE !== "0") {
+    try {
+      const { enginePlan } = require("./lib/engine/plan");
+      const { chatJSON } = require("./lib/ai");
+      job.stage = "engine — reading the video";
+      saveJob(job);
+      const eng = await enginePlan({
+        words: job.words,
+        duration: meta.duration,
+        utterances: job.speakers || [],
+        chapters: job.chapters || [],
+        mediaPath: job.input,
+        llm: process.env.GROQ_API_KEY ? chatJSON : null,
+        cachePath: path.join(UPLOAD_DIR, `${job.id}.scores.json`),
+        targetDuration: s.targetDuration ? parseFloat(s.targetDuration) : undefined,
+        onProgress: (stage) => {
+          job.stage = stage;
+          saveJob(job);
+        },
+      });
+      const engKeeps = validateEdl(eng.keeps, meta.duration, job.words);
+      job.summary = eng.summary;
+      job.planStats = computePlanStats(job, engKeeps, meta.duration);
+      if (s.review) {
+        job.plannedKeeps = engKeeps;
+        job.reviewBlocks = eng.blocks;
+        job.status = "review";
+        saveJob(job);
+        return;
+      }
+      return enqueueRender(job, () => renderJob(job, engKeeps));
+    } catch (e) {
+      console.error("engine plan failed — falling back to legacy planner:", e.message);
+    }
+  }
+
   const plan =
     job.mode === "highlights"
       ? await findHighlights(

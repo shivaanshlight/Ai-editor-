@@ -505,15 +505,21 @@ async function processJob(job) {
     try {
       const { enginePlan } = require("./lib/engine/plan");
       const { chatJSON } = require("./lib/ai");
+      const { geminiChatJSON, geminiAvailable } = require("./lib/gemini");
       job.stage = "engine — reading the video";
       saveJob(job);
+      // Fallback ladder: Gemini big-context (whole transcript, one batch,
+      // no chunking) → Groq (small batches) → deterministic-only.
+      const useGemini = geminiAvailable();
+      const llm = useGemini ? geminiChatJSON : process.env.GROQ_API_KEY ? chatJSON : null;
       const eng = await enginePlan({
         words: job.words,
         duration: meta.duration,
         utterances: job.speakers || [],
         chapters: job.chapters || [],
         mediaPath: job.input,
-        llm: process.env.GROQ_API_KEY ? chatJSON : null,
+        llm,
+        batchSize: useGemini ? 600 : 40,
         cachePath: path.join(UPLOAD_DIR, `${job.id}.scores.json`),
         targetDuration: s.targetDuration ? parseFloat(s.targetDuration) : undefined,
         onProgress: (stage) => {
@@ -524,6 +530,7 @@ async function processJob(job) {
       const engKeeps = validateEdl(eng.keeps, meta.duration, job.words);
       job.summary = eng.summary;
       job.planStats = computePlanStats(job, engKeeps, meta.duration);
+      job.engineFindings = eng.findings || [];
       if (s.review) {
         job.plannedKeeps = engKeeps;
         job.reviewBlocks = eng.blocks;
@@ -1265,6 +1272,7 @@ app.get("/api/jobs/:id", (req, res) => {
   };
   if (status === "review" || status === "done")
     payload.reviewBlocks = job.reviewBlocks;
+  if (job.engineFindings?.length) payload.engineFindings = job.engineFindings;
   if (job.planStats) payload.planStats = job.planStats;
   payload.searchReady = !!job.searchReady;
   if (job.transcriptText)

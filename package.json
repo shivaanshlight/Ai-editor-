@@ -6,7 +6,9 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "test": "node --test test/engine.test.js",
+    "bench": "node bench/editbench.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",

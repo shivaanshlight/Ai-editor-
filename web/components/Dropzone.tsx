@@ -1,6 +1,8 @@
 "use client";
 import { useRef, useState } from "react";
 
+// Template-style upload panel: a solid glass panel (not a dashed placeholder)
+// with a gradient tile, tactile hover glow, and a clear drop target.
 export default function Dropzone({
   onFile,
   disabled,
@@ -17,8 +19,7 @@ export default function Dropzone({
       tabIndex={0}
       onClick={() => !disabled && input.current?.click()}
       onKeyDown={(e) => {
-        if (!disabled && (e.key === "Enter" || e.key === " "))
-          input.current?.click();
+        if (!disabled && (e.key === "Enter" || e.key === " ")) input.current?.click();
       }}
       onDragOver={(e) => {
         e.preventDefault();
@@ -31,17 +32,32 @@ export default function Dropzone({
         const f = e.dataTransfer.files?.[0];
         if (f && !disabled) onFile(f);
       }}
-      className={`glass mt-6 cursor-pointer rounded-[22px] border-[1.5px] border-dashed px-5 py-14 text-center transition-all ${
-        over
-          ? "scale-[1.006] border-[var(--accent-2)] shadow-[0_0_44px_-8px_rgba(55,224,255,.6)]"
-          : "border-line2 hover:border-[var(--accent-2)] hover:shadow-[0_0_36px_-14px_rgba(55,224,255,.55)]"
-      } ${disabled ? "pointer-events-none opacity-50" : ""}`}
+      className={disabled ? "pointer-events-none opacity-50" : ""}
+      style={{
+        marginTop: 20,
+        cursor: "pointer",
+        borderRadius: 18,
+        border: "1px solid " + (over ? "var(--accent-line)" : "var(--hair)"),
+        background:
+          "linear-gradient(180deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 40%), var(--panel-2)",
+        padding: "44px 24px",
+        textAlign: "center",
+        transition: "border-color .18s, box-shadow .18s, transform .12s",
+        transform: over ? "translateY(-1px)" : "none",
+        boxShadow: over ? "0 0 44px -10px var(--glow-color)" : "none",
+      }}
     >
       <div
-        className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-2xl text-white"
         style={{
-          background: "linear-gradient(135deg, var(--accent), var(--accent-2))",
-          boxShadow: "0 0 30px -4px rgba(55,224,255,.7), inset 0 1px 0 rgba(255,255,255,.45)",
+          margin: "0 auto 16px",
+          width: 62,
+          height: 62,
+          display: "grid",
+          placeItems: "center",
+          borderRadius: 16,
+          color: "#fff",
+          background: "var(--grad)",
+          boxShadow: "0 8px 26px -6px var(--glow-color), inset 0 1px 0 rgba(255,255,255,.4)",
         }}
       >
         <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
@@ -54,8 +70,10 @@ export default function Dropzone({
           />
         </svg>
       </div>
-      <div className="text-[17px] font-semibold">Drop a video, or click to choose</div>
-      <div className="mt-1.5 text-[12.5px] text-faint">
+      <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-.01em" }}>
+        Drop a video, or click to choose
+      </div>
+      <div style={{ marginTop: 6, fontSize: 12.5, color: "var(--txt-3)" }}>
         mp4 · mov · mkv · webm — up to 2 GB, processed locally on your machine
       </div>
       <input

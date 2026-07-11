@@ -22,6 +22,7 @@ import {
 
 import Nav from "@/components/Nav";
 import Dropzone from "@/components/Dropzone";
+import FeatureIntro from "@/components/FeatureIntro";
 import AiConfig from "@/components/AiConfig";
 import ClipsConfig from "@/components/ClipsConfig";
 import SilenceConfig from "@/components/SilenceConfig";
@@ -33,25 +34,6 @@ import ClipReview from "@/components/ClipReview";
 import ClipEditor from "@/components/ClipEditor";
 import ClipsResult from "@/components/ClipsResult";
 import Result from "@/components/Result";
-
-const HEROES: Record<Mode, { h: string; s: string }> = {
-  ai: {
-    h: "Raw footage in. Finished edit out.",
-    s: "Describe the edit in plain English. Review the AI's plan, fix anything on the timeline, render as many versions as you need.",
-  },
-  highlights: {
-    h: "Turn hours into minutes.",
-    s: "The AI condenses your entire recording into one tight highlights cut — the best moments, stitched into a single watchable episode.",
-  },
-  clips: {
-    h: "Find the moments worth posting.",
-    s: "The AI scans your whole video for self-contained, high-scoring clips — then you pick, trim, and export them vertical or wide.",
-  },
-  silence: {
-    h: "Cut the dead air. Instantly.",
-    s: "No transcription, no waiting — just detect silent gaps and remove them. Fully offline and fast.",
-  },
-};
 
 const PROCESSING = new Set([
   "analyzing",
@@ -185,10 +167,7 @@ export default function Page() {
       <main className="mx-auto max-w-[1080px] px-5 pb-28 pt-2">
         {showSetup && (
           <section>
-            <h1 className="mt-6 max-w-[20ch] text-balance text-[clamp(26px,4vw,36px)] font-semibold tracking-tight">
-              {HEROES[mode].h}
-            </h1>
-            <p className="mt-2 max-w-[58ch] text-muted">{HEROES[mode].s}</p>
+            <FeatureIntro mode={mode} />
 
             <Dropzone onFile={handleFile} disabled={uploading} />
 

@@ -36,9 +36,43 @@ function mockScore(unit, R) {
   return 55 + R() * 40; // good material
 }
 
+/* --------------------------- M1 robust scorer path -------------------------- */
+
+const { scoreUnits } = require("../lib/engine/score");
+
+/**
+ * A deliberately flaky mock LLM: correct on substance (junk low, good high)
+ * but noisy across runs and randomly dropping ~20% of ids per call — the
+ * failure modes the batched-output + diversified-runs machinery must absorb.
+ */
+function flakyLlm(units, seed) {
+  const R = rng(seed * 104729 + 7);
+  const truth = new Map(units.map((u) => [u.id, u.truthJunk]));
+  return async (messages) => {
+    if (messages[0].content.includes("story editor")) {
+      const hook = units.find((u) => u.hook);
+      const closer = units.find((u) => u.closing);
+      return { beats: [], hookUnit: hook ? hook.id : null, closingUnit: closer ? closer.id : null };
+    }
+    const ids = [];
+    for (const line of messages[1].content.split("\n")) {
+      const m = line.match(/^(\d+)\t/);
+      if (m) ids.push(parseInt(m[1]));
+    }
+    const scores = [];
+    for (const id of ids) {
+      if (R() < 0.2) continue; // dropout
+      const junk = truth.get(id);
+      const base = junk ? 8 : 70;
+      scores.push({ id, score: Math.max(0, Math.min(100, Math.round(base + (R() - 0.5) * 24))), reason: "mock" });
+    }
+    return { scores };
+  };
+}
+
 /* ------------------------------- one bench run ----------------------------- */
 
-function runFixture(kind, seed, mode) {
+function runFixture(kind, seed, mode, scorer = "direct") {
   const fx = buildFixture(kind, seed);
   const R = rng(seed * 7919 + 13);
 
@@ -54,9 +88,21 @@ function runFixture(kind, seed, mode) {
     unit.closing = !!(meta && meta.closing);
   }
 
-  // mock S2
+  // mock S2 — "direct" assigns scores synchronously; "robust" pushes them
+  // through the real scoreUnits pipeline via a flaky mock LLM (dropouts +
+  // noise across diversified runs).
+  if (scorer === "robust") {
+    // scoreUnits is async; bench stays sync-friendly via a deasync-free trick:
+    // runFixture returns a promise in this mode (main() awaits all runs).
+    return scoreUnits(units, { llm: flakyLlm(units, seed) }).then((r) =>
+      finishRun(fx, units, mode, seed, kind, r.tier),
+    );
+  }
   for (const u of units) u.score = mockScore(u, R);
+  return finishRun(fx, units, mode, seed, kind, "direct");
+}
 
+function finishRun(fx, units, mode, seed, kind, tier) {
   // S3 + S5: the full decision loop (select → lint → repair → re-select)
   const junkCount = units.filter((u) => u.truthJunk).length;
   const selOpts =
@@ -114,6 +160,7 @@ function runFixture(kind, seed, mode) {
     kind,
     seed,
     mode,
+    tier,
     unitCount: units.length,
     junkCount: junkUnits.length,
     junkRecall,
@@ -140,20 +187,28 @@ function spanSilent(a, b, words) {
 
 /* ---------------------------------- main ------------------------------------ */
 
-function main() {
+async function main() {
   const runs = [];
   for (const kind of ["interview", "tutorial"]) {
     for (const seed of [1, 2, 3, 4, 5]) {
-      runs.push(runFixture(kind, seed, "tighten"));
+      runs.push(await runFixture(kind, seed, "tighten"));
     }
   }
-  runs.push(runFixture("interview", 11, "condense"));
-  runs.push(runFixture("tutorial", 12, "condense"));
+  runs.push(await runFixture("interview", 11, "condense"));
+  runs.push(await runFixture("tutorial", 12, "condense"));
+  // M1: same targets with the REAL scorer pipeline fed by a flaky mock LLM
+  // (20% dropouts per call + score noise across 3 diversified runs).
+  for (const kind of ["interview", "tutorial"]) {
+    for (const seed of [21, 22, 23]) {
+      runs.push(await runFixture(kind, seed, "tighten", "robust"));
+    }
+  }
+  runs.push(await runFixture("interview", 31, "condense", "robust"));
 
   const pct = (x) => `${Math.round(x * 1000) / 10}%`;
-  console.log("\nEditBench — M0 Deterministic Core\n");
+  console.log("\nEditBench — Deterministic Core + M1 scorer robustness\n");
   console.log(
-    "fixture     seed mode      units junk  recall   false-cut  lintW  badB  rtDev  repaired",
+    "fixture     seed mode      scorer  units junk  recall   false-cut  lintW  badB  rtDev  repaired",
   );
   for (const r of runs) {
     console.log(
@@ -161,6 +216,7 @@ function main() {
         r.kind.padEnd(11),
         String(r.seed).padEnd(4),
         r.mode.padEnd(9),
+        (r.tier === "direct" ? "direct" : r.tier).padEnd(7),
         String(r.unitCount).padEnd(5),
         String(r.junkCount).padEnd(5),
         pct(r.junkRecall).padEnd(8),
@@ -205,5 +261,5 @@ function main() {
   process.exit(ok ? 0 : 1);
 }
 
-if (require.main === module) main();
+if (require.main === module) main().catch((e) => { console.error(e); process.exit(1); });
 module.exports = { runFixture };

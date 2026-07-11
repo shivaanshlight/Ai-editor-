@@ -525,6 +525,31 @@ export default function Workspace({
           </div>
 
           <div className="tw-scroll" style={{ flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+            {/* server-engine linter findings — the engine's own second look,
+                shown verbatim when the backend ran the M1+ pipeline */}
+            {(job.engineFindings?.length ?? 0) > 0 && (
+              <div style={cardStyle(false)}>
+                <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+                  <div style={iconWrap(false)}><Icon name="scan" size={17} /></div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 700 }}>Engine findings</span>
+                      <Pill ok={false}>{job.engineFindings!.length} open</Pill>
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--txt-3)", marginTop: 2 }}>left for your judgment by the server linter</div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 11 }}>
+                  {job.engineFindings!.map((f, i) => (
+                    <div key={i} style={{ padding: "9px 11px", borderRadius: 10, background: f.severity >= 3 ? "var(--bad-soft)" : "var(--warn-soft)", border: "1px solid var(--hair)" }}>
+                      <div style={{ fontSize: 11.5, lineHeight: 1.45, color: "var(--txt-2)" }}>
+                        <b style={{ color: f.severity >= 3 ? "var(--bad)" : "var(--warn)" }}>{f.rule}</b> — {f.msg}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             {/* stat tiles */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
               <Tile value={`${card.keptPct}%`} label="material kept" />

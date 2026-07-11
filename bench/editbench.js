@@ -242,11 +242,50 @@ async function main() {
     runtimeDev: Math.max(...condense.map((r) => r.runtimeDev)),
   };
 
+  // ---- M1.5: tournament vs pointwise on borderline fixtures -----------------
+  // Truth quality is linear; pointwise scores are truth + heavy noise inside a
+  // narrow band. Accuracy = how many of the true top-half make the kept half.
+  const { runTournament } = require("../lib/engine/tournament");
+  let ptAcc = 0;
+  let tnAcc = 0;
+  const T = 6;
+  for (let trial = 0; trial < T; trial++) {
+    const R = rng(500 + trial);
+    const n = 10;
+    const truth = new Map();
+    const units = [];
+    for (let i = 0; i < n; i++) {
+      truth.set(i, i * 10); // true quality: unit 9 best
+      const noisy = 55 + (i - n / 2) * 0.4 + (R() - 0.5) * 10; // nearly flat + noise
+      units.push({ id: i, start: i * 6, end: i * 6 + 5, dur: 5, score: noisy, text: `unit ${i} says something`, words: [{ w: "x", s: 0, e: 1 }], flags: [], silence: false });
+    }
+    const K = n / 2;
+    const topTruth = new Set([...truth.entries()].sort((a, b) => b[1] - a[1]).slice(0, K).map(([id]) => id));
+    const topBy = (us) => new Set(us.slice().sort((a, b) => b.score - a.score).slice(0, K).map((u) => u.id));
+    const inter = (S) => [...S].filter((x) => topTruth.has(x)).length / K;
+    ptAcc += inter(topBy(units));
+    const judge = async (messages) => {
+      const m = messages[1].content.match(/^A \([\d.]+s\): unit (\d+)[\s\S]*B \([\d.]+s\): unit (\d+)/);
+      const a = parseInt(m[1]);
+      const b = parseInt(m[2]);
+      if (R() < 0.1) return { winner: "A" }; // some position bias
+      return { winner: truth.get(a) >= truth.get(b) ? "A" : "B" };
+    };
+    await runTournament(units, judge, { maxBand: n, maxPairs: 60 });
+    tnAcc += inter(topBy(units));
+  }
+  ptAcc /= T;
+  tnAcc /= T;
+  console.log(
+    `\nM1.5 borderline band: pointwise top-half accuracy ${pct(ptAcc)} → tournament ${pct(tnAcc)}`,
+  );
+
   const targets = [
     ["junk recall = 100%", agg.junkRecall === 1],
     ["false-cut rate = 0% (tighten)", agg.falseCutRate === 0],
     ["boundary violations = 0", agg.badBoundaries === 0],
     ["runtime deviation ≤ 10% (condense)", agg.runtimeDev <= 0.1],
+    ["tournament ≥ pointwise on borderline band", tnAcc >= ptAcc],
   ];
   console.log("\nM0 targets:");
   let ok = true;

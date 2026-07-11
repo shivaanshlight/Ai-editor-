@@ -87,6 +87,13 @@ export interface Chapter {
   title: string;
 }
 
+export interface EngineFinding {
+  rule: string;
+  severity: number;
+  unitId?: number;
+  msg: string;
+}
+
 export interface Job {
   id: string;
   status: JobStatus;
@@ -111,6 +118,7 @@ export interface Job {
   speakerLabels?: string[];
   speakerNames?: Record<string, string>;
   queuePos?: number;
+  engineFindings?: EngineFinding[];
 }
 
 export interface ChatCitation {

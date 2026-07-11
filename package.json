@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test test/engine.test.js test/engine-m1.test.js",
+    "test": "node --test test/engine.test.js test/engine-m1.test.js test/engine-m2.test.js",
     "bench": "node bench/editbench.js"
   },
   "dependencies": {

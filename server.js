@@ -51,6 +51,7 @@ const {
 const store = require("./lib/supabase");
 const { embed } = require("./lib/embed");
 const { diarize } = require("./lib/diarize");
+const whisperLocal = require("./lib/whisper-local");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -393,7 +394,27 @@ async function processJob(job) {
   let transcript = await store.getTranscript(fp);
   if (transcript) {
     job.stage = "cached — skipped transcription";
-  } else {
+  }
+  // Local whisper.cpp first: zero API, zero rate limits, one pass for the
+  // whole file. Every user transcribes on their own hardware — the app never
+  // shares a quota bottleneck. Groq below is only the fallback.
+  if (!transcript && whisperLocal.available()) {
+    try {
+      job.stage = "transcribing locally — no rate limits";
+      saveJob(job);
+      transcript = await whisperLocal.transcribe(job.input, {
+        onProgress: (pct) => {
+          job.progress = pct;
+          job.stage = `transcribing locally — ${pct}%`;
+        },
+      });
+      await store.saveTranscript(fp, transcript);
+    } catch (e) {
+      console.error("local whisper failed — falling back to Groq:", e.message);
+      transcript = null;
+    }
+  }
+  if (!transcript) {
     const chunks = await extractAudioChunked(
       job.input,
       job.input,
@@ -1497,6 +1518,11 @@ async function init() {
       HAS_WEB
         ? "Frontend: edit.ai (web/out) ✓"
         : "Frontend: public/index.html (single-file build) ✓",
+    );
+    console.log(
+      whisperLocal.available()
+        ? "Transcription: local whisper.cpp ✓ (no rate limits)"
+        : "Transcription: Groq API (rate-limited) — run `npm run setup-whisper` to go local",
     );
     console.log(
       store.ready

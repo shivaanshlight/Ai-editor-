@@ -93,3 +93,25 @@ test("enginePlan: consecutive kept units bridge into few segments (render fast p
   // and every inter-sentence pause inside a kept run is preserved (no jump cut)
   for (const s of eng.keeps) assert.ok(s.end - s.start > 0, "valid span");
 });
+
+/* --------------------------- local whisper parser -------------------------- */
+
+const { parseWhisperJson } = require("../lib/whisper-local");
+
+test("parseWhisperJson: word entries with offsets → server word shape", () => {
+  const out = parseWhisperJson({
+    transcription: [
+      { text: " Hello", offsets: { from: 0, to: 400 } },
+      { text: " there,", offsets: { from: 420, to: 900 } },
+      { text: " two words", offsets: { from: 1000, to: 2000 } }, // multi-word token splits
+      { text: "  ", offsets: { from: 2000, to: 2100 } }, // blank dropped
+    ],
+  });
+  assert.equal(out.words.length, 4);
+  assert.equal(out.words[0].word, "Hello");
+  assert.equal(out.words[0].start, 0);
+  assert.equal(out.words[1].end, 0.9);
+  assert.equal(out.words[2].word, "two");
+  assert.ok(out.words[3].start > out.words[2].start, "split token keeps order");
+  assert.match(out.text, /Hello there, two words/);
+});

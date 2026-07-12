@@ -415,9 +415,48 @@ export function repairOverrides(
       ov[closer.id] = "keep";
       changed++;
     }
+    // Sub-phrase kept runs: extend monotonically by restoring the best
+    // adjacent cut unit (clean neighbors preferred over disfluent ones;
+    // silence units count — restoring air lengthens the run too).
+    const disfl = (u: WUnit) =>
+      u.flags.includes("filler") || u.flags.includes("false start");
+    let runStart = -1;
+    for (let i = 0; i <= units.length; i++) {
+      const kept = i < units.length && status[units[i].id] !== "cut";
+      if (kept && runStart < 0) runStart = i;
+      if (!kept && runStart >= 0) {
+        const dur = units[i - 1].end - units[runStart].start;
+        if (dur < 1.2) {
+          const cands: WUnit[] = [];
+          if (runStart > 0 && status[units[runStart - 1].id] === "cut")
+            cands.push(units[runStart - 1]);
+          if (i < units.length) cands.push(units[i]);
+          const clean = cands.filter((u) => !disfl(u));
+          const pool = (clean.length ? clean : []).sort(
+            (a, b) => (b.score ?? 0) - (a.score ?? 0),
+          );
+          const pick = pool[0];
+          if (pick && ov[pick.id] !== "keep") {
+            ov[pick.id] = "keep";
+            changed++;
+          }
+        }
+        runStart = -1;
+      }
+    }
     if (changed === 0) break;
   }
   return ov;
+}
+
+/** How many currently-cut units a repair pass would restore (0 = nothing auto-fixable). */
+export function repairableCount(units: WUnit[], st: WState): number {
+  const before = statusMap(units, st);
+  const ov = repairOverrides(units, st);
+  const after = statusMap(units, { ...st, overrides: ov });
+  let n = 0;
+  for (const u of units) if (before[u.id] === "cut" && after[u.id] !== "cut") n++;
+  return n;
 }
 
 /** Full Kettle Ep.14 fixture — matches the Transcript Workspace Pro template. */

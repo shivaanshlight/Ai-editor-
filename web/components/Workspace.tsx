@@ -21,6 +21,7 @@ import {
   groupUnits,
   computeCard,
   repairOverrides,
+  repairableCount,
 } from "@/lib/workspace";
 
 /* ---------------------------------- icons --------------------------------- */
@@ -344,19 +345,27 @@ export default function Workspace({
     toastTimer.current = setTimeout(() => setToast(null), 3200);
   };
   const runRepair = () => {
+    // Honest accounting: count what the repair ACTUALLY restores, and say so.
+    const restored = repairableCount(units, st);
     const ov = repairOverrides(units, st);
-    const before = card.totalIssues;
-    const resolved = before;
     applyDecision((s) => ({ ...s, overrides: ov }));
-    const msg = before > 0
-      ? `Repair complete — ${resolved} ${resolved === 1 ? "finding" : "findings"} addressed.`
-      : "Nothing to repair — the linter is already clean.";
+    const msg =
+      restored > 0
+        ? `Repair restored ${restored} line${restored === 1 ? "" : "s"}.`
+        : "Nothing auto-fixable — the remaining findings need your judgment.";
     if (toastTimer.current) clearTimeout(toastTimer.current);
     setToast(msg);
     toastTimer.current = setTimeout(() => setToast(null), 3600);
   };
   const render = () =>
     onRender(included, {}, job.speakerNames || undefined, coldOpen || undefined);
+
+  // Findings split into auto-fixable vs judgment-only; the repair button
+  // must never promise fixes it cannot make.
+  const fixable = useMemo(
+    () => (card.clean ? 0 : repairableCount(units, st)),
+    [units, st, card.clean],
+  );
 
   /* --------------------------------- view --------------------------------- */
   const keepQuantilePct = Math.round((card.keptCount / (units.length || 1)) * 100);
@@ -773,14 +782,22 @@ export default function Workspace({
 
           {/* repair footer */}
           <div style={{ flex: "0 0 auto", padding: "13px 14px", borderTop: "1px solid var(--hair)", background: "var(--bg-elev)" }}>
-            <button onClick={runRepair} disabled={card.clean} style={{
+            <button onClick={runRepair} disabled={card.clean || fixable === 0} style={{
               width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, height: 44,
               borderRadius: 12, border: "none", fontFamily: "inherit", fontWeight: 700, fontSize: 13,
-              cursor: card.clean ? "default" : "pointer", color: card.clean ? "var(--txt-3)" : "#fff",
-              background: card.clean ? "var(--chip)" : "var(--grad)", boxShadow: card.clean ? "none" : "0 4px 16px var(--glow-color)",
+              cursor: card.clean || fixable === 0 ? "default" : "pointer",
+              color: card.clean || fixable === 0 ? "var(--txt-3)" : "#fff",
+              background: card.clean || fixable === 0 ? "var(--chip)" : "var(--grad)",
+              boxShadow: card.clean || fixable === 0 ? "none" : "0 4px 16px var(--glow-color)",
             }}>
               <Icon name="sparkle" size={16} fill />
-              <span>{card.clean ? "Linter clean — nothing to repair" : `Run repair · ${card.totalIssues} finding${card.totalIssues === 1 ? "" : "s"}`}</span>
+              <span>
+                {card.clean
+                  ? "Linter clean — nothing to repair"
+                  : fixable > 0
+                    ? `Run repair · ${fixable} fixable`
+                    : `${card.totalIssues} finding${card.totalIssues === 1 ? "" : "s"} — needs your judgment`}
+              </span>
             </button>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 9 }}>
               <span style={{ fontSize: 10.5, color: "var(--txt-3)" }}>Repairs restore antecedents, payoffs &amp; coverage.</span>

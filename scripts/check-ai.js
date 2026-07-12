@@ -34,7 +34,7 @@ console.log("  ASSEMBLYAI     :", process.env.ASSEMBLYAI_API_KEY ? "present" : "
 
 async function tryGemini() {
   if (!process.env.GEMINI_API_KEY) return console.log("\nGemini: skipped (no key)");
-  const { geminiChatJSON, MODEL } = require("../lib/gemini");
+  const { geminiChatJSON, getResolvedModel } = require("../lib/gemini");
   try {
     const t0 = Date.now();
     const res = await geminiChatJSON(
@@ -44,12 +44,12 @@ async function tryGemini() {
       ],
       { temperature: 0 },
     );
-    console.log(`\n✓ Gemini WORKS (${MODEL}, ${Date.now() - t0}ms):`, JSON.stringify(res));
+    console.log(`\n✓ Gemini WORKS (model auto-picked: ${getResolvedModel()}, ${Date.now() - t0}ms):`, JSON.stringify(res));
   } catch (e) {
     console.log(`\n✗ Gemini FAILED: ${e.message}`);
     if (/400/.test(e.message)) console.log("  → key malformed or model name rejected");
     if (/403/.test(e.message)) console.log("  → key invalid/restricted — regenerate at aistudio.google.com");
-    if (/404/.test(e.message)) console.log(`  → model "${require("../lib/gemini").MODEL}" not available to this key — try GEMINI_MODEL=gemini-2.0-flash in .env`);
+    if (/404/.test(e.message)) console.log("  → no usable model even after auto-discovery — paste this output to Claude");
     if (/429/.test(e.message)) console.log("  → free-tier quota exhausted right now — try again in a minute");
   }
 }

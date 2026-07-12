@@ -1,4 +1,3 @@
-
 /**
  * scripts/setup-whisper.js — one-command local transcription setup.
  *
@@ -75,13 +74,26 @@ function extractZip(zipPath, destDir) {
   }
 }
 
-function findExe(dir) {
+function findExe(dir, skipPath) {
   const stack = [dir];
   while (stack.length) {
     const d = stack.pop();
-    for (const f of fs.readdirSync(d)) {
+    let entries;
+    try {
+      entries = fs.readdirSync(d);
+    } catch {
+      continue; // directory vanished mid-walk — skip it, don't crash the install
+    }
+    for (const f of entries) {
       const p = path.join(d, f);
-      if (fs.statSync(p).isDirectory()) stack.push(p);
+      if (skipPath && path.resolve(p) === path.resolve(skipPath)) continue; // don't stat the zip we're about to delete
+      let st;
+      try {
+        st = fs.statSync(p);
+      } catch {
+        continue; // file vanished between readdir and stat — race-safe skip
+      }
+      if (st.isDirectory()) stack.push(p);
       else if (/^(whisper-cli|main)(\.exe)?$/i.test(f)) return p;
     }
   }
@@ -103,13 +115,19 @@ async function main() {
     const zip = path.join(BIN, asset.name);
     await download(asset.url, zip, `whisper.cpp ${asset.tag} (${asset.name})`);
     extractZip(zip, BIN);
-    fs.unlink(zip, () => {});
-    const exe = findExe(BIN);
+    // Find (and copy into place) the binary FIRST, skipping the zip itself
+    // during the walk. Only delete the zip once we're completely done
+    // reading the directory — never concurrently with the scan.
+    const exe = findExe(BIN, zip);
     if (!exe) throw new Error("binary zip extracted but no whisper-cli.exe/main.exe found");
-    // normalize location so the app finds it
     const target = path.join(BIN, "whisper-cli.exe");
     if (path.resolve(exe) !== path.resolve(target)) fs.copyFileSync(exe, target);
     console.log(`✓ binary ready: ${target}`);
+    try {
+      fs.unlinkSync(zip);
+    } catch {
+      /* leftover zip is harmless — the app never reads it */
+    }
   } else {
     console.log("Non-Windows: build whisper.cpp once →");
     console.log("  git clone https://github.com/ggml-org/whisper.cpp && cd whisper.cpp && make");

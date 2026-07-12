@@ -549,6 +549,13 @@ async function processJob(job) {
           saveJob(job);
         },
       });
+      // Never fail silently: if the scorer fell down the ladder, say WHY.
+      if (eng.scoreError) {
+        console.error(
+          `scoring fell back to ${eng.tier} tier (provider: ${useGemini ? "gemini" : "groq"}):`,
+          eng.scoreError,
+        );
+      }
       const engKeeps = validateEdl(eng.keeps, meta.duration, job.words);
       job.summary = eng.summary;
       job.planStats = computePlanStats(job, engKeeps, meta.duration);
@@ -1523,6 +1530,13 @@ async function init() {
       whisperLocal.available()
         ? "Transcription: local whisper.cpp ✓ (no rate limits)"
         : "Transcription: Groq API (rate-limited) — run `npm run setup-whisper` to go local",
+    );
+    console.log(
+      process.env.GEMINI_API_KEY
+        ? "Scoring: Gemini big-context ✓"
+        : process.env.GROQ_API_KEY
+          ? "Scoring: Groq batched (add GEMINI_API_KEY for whole-video scoring)"
+          : "Scoring: deterministic only — no LLM key found",
     );
     console.log(
       store.ready

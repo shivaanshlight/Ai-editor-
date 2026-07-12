@@ -521,6 +521,7 @@ async function processJob(job) {
         llm,
         batchSize: useGemini ? 600 : 40,
         cachePath: path.join(UPLOAD_DIR, `${job.id}.scores.json`),
+        telemetryPath: path.join(UPLOAD_DIR, "preferences.jsonl"),
         targetDuration: s.targetDuration ? parseFloat(s.targetDuration) : undefined,
         onProgress: (stage) => {
           job.stage = stage;
@@ -1066,12 +1067,31 @@ app.post("/api/jobs/:id/render", async (req, res) => {
   if (job.status !== "review" && job.status !== "done")
     return res.status(400).json({ error: "Job is not editable right now." });
 
-  const keeps = sanitizeSegments(
+  let keeps = sanitizeSegments(
     req.body.included || job.plannedKeeps,
     job.meta.duration,
   );
   if (!keeps.length)
     return res.status(400).json({ error: "Nothing selected to keep." });
+
+  // M3 preference telemetry: the user's corrections against the engine's plan
+  // are labeled taste examples fed to future scoring prompts.
+  if (job.plannedKeeps?.length && req.body.included) {
+    try {
+      const { diffPlan, record } = require("./lib/engine/telemetry");
+      const corrections = diffPlan(job.plannedKeeps, keeps, job.words || []);
+      record(path.join(UPLOAD_DIR, "preferences.jsonl"), corrections);
+    } catch {}
+  }
+
+  // M3 Cold Open: lift the hook's segment to the front as a teaser.
+  if (req.body.coldOpen) {
+    try {
+      const { liftColdOpen } = require("./lib/engine/plan");
+      const hookBlock = (job.reviewBlocks || []).find((b) => b.hook);
+      if (hookBlock) keeps = liftColdOpen(keeps, hookBlock.start);
+    } catch {}
+  }
 
   // Apply caption text corrections (word index → new text; timing preserved).
   const edits = req.body.wordEdits || {};

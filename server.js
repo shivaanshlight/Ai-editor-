@@ -1496,7 +1496,7 @@ async function init() {
     console.log(
       HAS_WEB
         ? "Frontend: edit.ai (web/out) ✓"
-        : "Frontend: legacy public/index.html — run `npm run build` in web/ for the new UI",
+        : "Frontend: public/index.html (single-file build) ✓",
     );
     console.log(
       store.ready

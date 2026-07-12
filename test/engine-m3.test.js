@@ -157,3 +157,25 @@ test("linter: sub-phrase run with only junk neighbors stays flagged (no garbage 
   assert.ok(sub, "still flagged");
   assert.ok(!sub.repair, "no repair — both neighbors are junk, human decides");
 });
+
+/* --------------------------- gemini tolerant parse ------------------------- */
+
+const { parseJsonLoose } = require("../lib/gemini");
+
+test("parseJsonLoose: handles clean, fenced, trailing-text, and array replies", () => {
+  assert.deepEqual(parseJsonLoose('{"ok":true}'), { ok: true });
+  // trailing text after JSON (the position-11 failure)
+  assert.deepEqual(parseJsonLoose('{"ok":true}\n\nHope that helps!'), { ok: true });
+  // ```json fenced
+  assert.deepEqual(parseJsonLoose('```json\n{"scores":[{"id":1,"score":80}]}\n```'), {
+    scores: [{ id: 1, score: 80 }],
+  });
+  // bare ``` fence
+  assert.deepEqual(parseJsonLoose('```\n{"a":[1,2,3]}\n```'), { a: [1, 2, 3] });
+  // preamble then JSON array
+  assert.deepEqual(parseJsonLoose('Here you go: [{"id":0}]'), [{ id: 0 }]);
+  // braces inside strings don't confuse the balancer
+  assert.deepEqual(parseJsonLoose('{"reason":"a {weird} value"} trailing'), {
+    reason: "a {weird} value",
+  });
+});

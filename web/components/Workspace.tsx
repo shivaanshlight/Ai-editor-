@@ -109,6 +109,23 @@ const cardStyle = (ok: boolean): CSSProperties => ({
   borderRadius: "14px", padding: "13px 14px", background: "var(--panel-2)",
   border: "1px solid " + (ok ? "var(--hair)" : "var(--bad-soft)"),
 });
+const miniBtn = (enabled: boolean): CSSProperties => ({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 5,
+  padding: "6px 11px",
+  borderRadius: 9,
+  border: "1px solid var(--hair)",
+  background: "var(--chip)",
+  color: enabled ? "var(--txt-2)" : "var(--txt-3)",
+  fontFamily: "inherit",
+  fontWeight: 700,
+  fontSize: 11.5,
+  cursor: enabled ? "pointer" : "not-allowed",
+  whiteSpace: "nowrap",
+  opacity: enabled ? 1 : 0.5,
+});
+
 const iconWrap = (ok: boolean): CSSProperties => ({
   width: "34px", height: "34px", flex: "0 0 auto", borderRadius: "10px",
   display: "flex", alignItems: "center", justifyContent: "center",
@@ -126,6 +143,7 @@ export default function Workspace({
     included: Segment[],
     wordEdits: Record<number, string>,
     speakerNames?: Record<string, string>,
+    coldOpen?: boolean,
   ) => void;
 }) {
   const isDemo = job.id === "demo";
@@ -136,6 +154,10 @@ export default function Workspace({
   const [currentTime, setCurrentTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [coldOpen, setColdOpen] = useState(false);
+  // Decision-layer undo: every decision mutation snapshots the previous state.
+  const histRef = useRef<WState[]>([]);
+  const [histLen, setHistLen] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const scrubRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -146,7 +168,44 @@ export default function Workspace({
   useEffect(() => {
     setSt(initialState());
     setCurrentTime(0);
+    histRef.current = [];
+    setHistLen(0);
   }, [units]);
+
+  /** Snapshot + apply a decision mutation (undoable). */
+  const applyDecision = (next: WState | ((s: WState) => WState)) => {
+    setSt((cur) => {
+      histRef.current.push({
+        overrides: { ...cur.overrides },
+        locked: { ...cur.locked },
+        tightness: cur.tightness,
+        mode: cur.mode,
+      });
+      if (histRef.current.length > 50) histRef.current.shift();
+      setHistLen(histRef.current.length);
+      return typeof next === "function" ? next(cur) : next;
+    });
+  };
+  const undo = () => {
+    const prev = histRef.current.pop();
+    if (prev) {
+      setHistLen(histRef.current.length);
+      setSt(prev);
+    }
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        undo();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const status = useMemo(() => statusMap(units, st), [units, st]);
   const card = useMemo(
@@ -252,23 +311,43 @@ export default function Workspace({
     e?.stopPropagation();
     if (st.locked[u.id]) return;
     const next: "keep" | "cut" = status[u.id] === "keep" ? "cut" : "keep";
-    setSt((s) => ({ ...s, overrides: { ...s.overrides, [u.id]: next } }));
+    applyDecision((s) => ({ ...s, overrides: { ...s.overrides, [u.id]: next } }));
   };
   const toggleLock = (u: WUnit, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    setSt((s) => {
+    applyDecision((s) => {
       const locked = { ...s.locked };
       if (locked[u.id]) delete locked[u.id];
       else locked[u.id] = true;
       return { ...s, locked };
     });
   };
-  const reset = () => setSt((s) => ({ ...s, overrides: {}, locked: {} }));
+  const reset = () => applyDecision((s) => ({ ...s, overrides: {}, locked: {} }));
+  // One-go filler review: cut every disfluency-flagged unit that isn't locked.
+  const sweepFillers = () => {
+    const targets = units.filter(
+      (u) => u.flags.some((f) => ["filler", "false start"].includes(f)) && !st.locked[u.id],
+    );
+    if (!targets.length) {
+      setToast("No filler-flagged lines to sweep.");
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      toastTimer.current = setTimeout(() => setToast(null), 2600);
+      return;
+    }
+    applyDecision((s) => {
+      const overrides = { ...s.overrides };
+      for (const u of targets) overrides[u.id] = "cut";
+      return { ...s, overrides };
+    });
+    setToast(`Swept ${targets.length} filler line${targets.length === 1 ? "" : "s"} — Undo to revert.`);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 3200);
+  };
   const runRepair = () => {
     const ov = repairOverrides(units, st);
     const before = card.totalIssues;
     const resolved = before;
-    setSt((s) => ({ ...s, overrides: ov }));
+    applyDecision((s) => ({ ...s, overrides: ov }));
     const msg = before > 0
       ? `Repair complete — ${resolved} ${resolved === 1 ? "finding" : "findings"} addressed.`
       : "Nothing to repair — the linter is already clean.";
@@ -277,7 +356,7 @@ export default function Workspace({
     toastTimer.current = setTimeout(() => setToast(null), 3600);
   };
   const render = () =>
-    onRender(included, {}, job.speakerNames || undefined);
+    onRender(included, {}, job.speakerNames || undefined, coldOpen || undefined);
 
   /* --------------------------------- view --------------------------------- */
   const keepQuantilePct = Math.round((card.keptCount / (units.length || 1)) * 100);
@@ -465,7 +544,7 @@ export default function Workspace({
                   {(["tighten", "condense"] as Mode[]).map((m) => {
                     const on = st.mode === m;
                     return (
-                      <button key={m} onClick={() => setSt((s) => ({ ...s, mode: m }))} style={{
+                      <button key={m} onClick={() => applyDecision((s) => ({ ...s, mode: m }))} style={{
                         padding: "6px 14px", border: "none", borderRadius: 8, fontFamily: "inherit", fontWeight: 700,
                         fontSize: 12, cursor: "pointer", whiteSpace: "nowrap",
                         background: on ? "var(--grad)" : "transparent", color: on ? "#fff" : "var(--txt-2)",
@@ -481,7 +560,14 @@ export default function Workspace({
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
                     <span style={{ fontSize: 10.5, fontWeight: 600, color: "var(--txt-3)", flex: "0 0 auto" }}>Gentle</span>
-                    <div ref={trackRef} onPointerDown={(e) => { dragRef.current = "track"; trackFromX(e.clientX); }}
+                    <div ref={trackRef} onPointerDown={(e) => {
+                      // snapshot once per drag so one slider gesture = one undo step
+                      histRef.current.push({ overrides: { ...st.overrides }, locked: { ...st.locked }, tightness: st.tightness, mode: st.mode });
+                      if (histRef.current.length > 50) histRef.current.shift();
+                      setHistLen(histRef.current.length);
+                      dragRef.current = "track";
+                      trackFromX(e.clientX);
+                    }}
                       style={{ position: "relative", flex: 1, height: 20, display: "flex", alignItems: "center", cursor: "pointer", touchAction: "none" }}>
                       <div style={{ position: "absolute", left: 0, right: 0, height: 5, borderRadius: 999, background: "var(--hair)" }} />
                       <div style={{ position: "absolute", left: 0, width: `${st.tightness}%`, height: 5, borderRadius: 999, background: "var(--grad)", boxShadow: "0 0 10px var(--glow-color)", pointerEvents: "none" }} />
@@ -489,6 +575,29 @@ export default function Workspace({
                     </div>
                     <span style={{ fontSize: 10.5, fontWeight: 600, color: "var(--txt-3)", flex: "0 0 auto" }}>Tight</span>
                   </div>
+                </div>
+                {/* M3 controls: undo · filler sweep · cold open */}
+                <div style={{ display: "flex", alignItems: "center", gap: 6, borderLeft: "1px solid var(--hair)", paddingLeft: 12 }}>
+                  <button onClick={undo} disabled={histLen === 0} title="Undo (Ctrl+Z)" style={miniBtn(histLen > 0)}>
+                    <Icon name="reset" size={13} /> Undo
+                  </button>
+                  <button onClick={sweepFillers} title="Cut every filler-flagged line in one go" style={miniBtn(true)}>
+                    Sweep fillers
+                  </button>
+                  {units.some((u) => u.hook) && (
+                    <button
+                      onClick={() => setColdOpen((v) => !v)}
+                      title="Open the export with the hook as a teaser, then play chronologically"
+                      style={{
+                        ...miniBtn(true),
+                        background: coldOpen ? "var(--grad)" : "var(--chip)",
+                        color: coldOpen ? "#fff" : "var(--txt-2)",
+                        boxShadow: coldOpen ? "0 2px 10px var(--glow-color)" : "none",
+                      }}
+                    >
+                      Cold open {coldOpen ? "on" : "off"}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -500,7 +609,11 @@ export default function Workspace({
               <span style={{ fontSize: 12.5, fontFamily: "var(--mono)", color: "var(--txt-2)" }}>
                 keeping <b style={{ color: "var(--txt)" }}>{fmt(card.runtime)}</b> of {fmt(source)} · {card.cutCount} cuts · {card.cutsPerMin}/min
               </span>
-              <button onClick={reset} className="btn btn-sm" style={{ marginLeft: "auto" }}>Reset to AI plan</button>
+              <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                <button onClick={undo} disabled={histLen === 0} className="btn btn-sm">Undo</button>
+                <button onClick={sweepFillers} className="btn btn-sm">Sweep fillers</button>
+                <button onClick={reset} className="btn btn-sm">Reset to AI plan</button>
+              </span>
             </div>
           )}
         </main>

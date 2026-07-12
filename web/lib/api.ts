@@ -40,11 +40,12 @@ export async function renderEdit(
   included: Segment[],
   wordEdits: Record<number, string>,
   speakerNames?: Record<string, string>,
+  coldOpen?: boolean,
 ): Promise<void> {
   const res = await fetch(`/api/jobs/${id}/render`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ included, wordEdits, speakerNames }),
+    body: JSON.stringify({ included, wordEdits, speakerNames, coldOpen }),
   });
   await jsonOrThrow(res);
 }

@@ -103,8 +103,19 @@ function runFixture(kind, seed, mode, scorer = "direct") {
 }
 
 function finishRun(fx, units, mode, seed, kind, tier) {
+  // M3: inject user locks — one good unit AND one junk unit. Locks are the
+  // user's explicit word and must survive every stage, even on junk.
+  const Rl = rng(seed * 31 + 5);
+  const lockable = units.filter((u) => !u.mustKeep);
+  const goodPick = lockable.filter((u) => !u.truthJunk);
+  const junkPick = lockable.filter((u) => u.truthJunk);
+  const locked = [];
+  if (goodPick.length) locked.push(goodPick[Math.floor(Rl() * goodPick.length)]);
+  if (junkPick.length) locked.push(junkPick[Math.floor(Rl() * junkPick.length)]);
+  for (const u of locked) u.mustKeep = true;
+
   // S3 + S5: the full decision loop (select → lint → repair → re-select)
-  const junkCount = units.filter((u) => u.truthJunk).length;
+  const junkCount = units.filter((u) => u.truthJunk && !u.mustKeep).length;
   const selOpts =
     mode === "condense"
       ? {
@@ -127,8 +138,11 @@ function finishRun(fx, units, mode, seed, kind, tier) {
   const edl = craftBoundaries(segs, fx.words, { duration: fx.duration });
 
   // ---- metrics --------------------------------------------------------------
-  const junkUnits = units.filter((u) => u.truthJunk);
-  const goodUnits = units.filter((u) => !u.truthJunk);
+  // Locked units are the user's explicit choice — excluded from recall/false-cut
+  // (locking junk keeps it on purpose), gated separately as lock violations.
+  const lockViolations = locked.filter((u) => !keep[units.indexOf(u)]).length;
+  const junkUnits = units.filter((u) => u.truthJunk && !u.mustKeep);
+  const goodUnits = units.filter((u) => !u.truthJunk && !u.mustKeep);
   const junkCut = junkUnits.filter((u) => !keep[units.indexOf(u)]).length;
   const goodCut = goodUnits.filter((u) => !keep[units.indexOf(u)]).length;
 
@@ -168,6 +182,7 @@ function finishRun(fx, units, mode, seed, kind, tier) {
     violationWeight,
     badBoundaries,
     runtimeDev,
+    lockViolations,
     repaired: loop.restored.length,
   };
 }
@@ -240,6 +255,7 @@ async function main() {
     violations: Math.max(...runs.map((r) => r.violationWeight)),
     badBoundaries: Math.max(...runs.map((r) => r.badBoundaries)),
     runtimeDev: Math.max(...condense.map((r) => r.runtimeDev)),
+    lockViolations: Math.max(...runs.map((r) => r.lockViolations || 0)),
   };
 
   // ---- M1.5: tournament vs pointwise on borderline fixtures -----------------
@@ -286,6 +302,7 @@ async function main() {
     ["boundary violations = 0", agg.badBoundaries === 0],
     ["runtime deviation ≤ 10% (condense)", agg.runtimeDev <= 0.1],
     ["tournament ≥ pointwise on borderline band", tnAcc >= ptAcc],
+    ["locked spans never cut", agg.lockViolations === 0],
   ];
   console.log("\nM0 targets:");
   let ok = true;

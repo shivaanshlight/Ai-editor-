@@ -131,9 +131,10 @@ export default function Page() {
     included: Segment[],
     wordEdits: Record<number, string>,
     speakerNames?: Record<string, string>,
+    coldOpen?: boolean,
   ) => {
     if (!activeJobId) return;
-    await renderEdit(activeJobId, included, wordEdits, speakerNames);
+    await renderEdit(activeJobId, included, wordEdits, speakerNames, coldOpen);
     poke();
   };
   const onClipsRender = async (selected: number[]) => {

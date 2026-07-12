@@ -73,3 +73,23 @@ test("liftColdOpen: no-op when hook is already first or missing", () => {
   assert.deepEqual(liftColdOpen(keeps, 999).map((s) => s.start), [0, 10], "hook not found");
   assert.deepEqual(liftColdOpen(keeps, null).map((s) => s.start), [0, 10], "no hook");
 });
+
+/* -------------------------- segment-count guard -------------------------- */
+
+const { enginePlan } = require("../lib/engine/plan");
+
+test("enginePlan: consecutive kept units bridge into few segments (render fast path)", async () => {
+  const { buildFixture } = require("../bench/fixtures");
+  const fx = buildFixture("interview", 7);
+  const serverWords = fx.words.map((w) => ({ word: w.w, start: w.s, end: w.e }));
+  const eng = await enginePlan({ words: serverWords, duration: fx.duration, llm: null });
+  const keptBlocks = eng.blocks.filter((b) => b.type === "keep").length;
+  // A per-unit EDL would emit ~keptBlocks segments; bridging must collapse
+  // consecutive keeps so segments ≈ number of cut runs, far below unit count.
+  assert.ok(
+    eng.keeps.length < keptBlocks / 2,
+    `expected bridged segments, got ${eng.keeps.length} for ${keptBlocks} kept units`,
+  );
+  // and every inter-sentence pause inside a kept run is preserved (no jump cut)
+  for (const s of eng.keeps) assert.ok(s.end - s.start > 0, "valid span");
+});

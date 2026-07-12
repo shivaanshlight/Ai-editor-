@@ -181,19 +181,35 @@ export function statusMap(
   return out;
 }
 
-/** Kept units → merged output segments for the backend render. */
-export function buildIncluded(units: WUnit[], status: StatusMap): Segment[] {
+/**
+ * Kept units → merged output segments for the backend render.
+ *
+ * Consecutive kept units bridge into ONE segment across their natural
+ * inter-sentence pause (up to maxBridge). Splitting on every pause turns
+ * each sentence gap into a jump cut AND explodes the segment count past the
+ * renderer's fast-seek limit, making renders take an hour instead of
+ * minutes. A cut only exists where a unit between two keeps was removed, or
+ * across dead air longer than maxBridge.
+ */
+export function buildIncluded(
+  units: WUnit[],
+  status: StatusMap,
+  maxBridge = 1.5,
+): Segment[] {
   const segs: Segment[] = [];
+  let prevKept = false;
   for (const u of units) {
-    if (status[u.id] !== "cut") segs.push({ start: u.start, end: u.end });
+    if (status[u.id] === "cut") {
+      prevKept = false;
+      continue;
+    }
+    const last = segs[segs.length - 1];
+    const gap = last ? u.start - last.end : Infinity;
+    if (last && prevKept && gap <= maxBridge) last.end = u.end;
+    else segs.push({ start: u.start, end: u.end });
+    prevKept = true;
   }
-  const merged: Segment[] = [];
-  for (const s of segs) {
-    const last = merged[merged.length - 1];
-    if (last && s.start <= last.end + 0.05) last.end = Math.max(last.end, s.end);
-    else merged.push({ ...s });
-  }
-  return merged;
+  return segs;
 }
 
 /** Chapter-grouped units in source order (unit.chapter → job.chapters → one). */

@@ -115,3 +115,45 @@ test("parseWhisperJson: word entries with offsets → server word shape", () => 
   assert.ok(out.words[3].start > out.words[2].start, "split token keeps order");
   assert.match(out.text, /Hello there, two words/);
 });
+
+/* ------------------------ sub-phrase extension repair ---------------------- */
+
+const { lint: lintFn, lintRepairLoop: loopFn } = require("../lib/engine/lint");
+
+test("linter: sub-phrase kept run gets a monotone extension repair", () => {
+  const mk = (id, start, dur, flags = []) => ({
+    id, start, end: start + dur, dur, text: "unit " + id + " says useful things here",
+    words: [{ w: "x", s: start, e: start + dur }], flags, score: 60 + id,
+  });
+  // kept: only unit 2 (0.6s) — isolated sub-phrase; neighbors 1 and 3 cut, 3 scores higher
+  const units = [mk(0, 0, 5), mk(1, 6, 5), mk(2, 12, 0.6), mk(3, 14, 5), mk(4, 20, 5)];
+  const keep = [false, false, true, false, false];
+  const findings = lintFn(units, keep);
+  const sub = findings.find((f) => f.rule === "rhythm" && /shorter than a phrase/.test(f.msg));
+  assert.ok(sub, "sub-phrase finding present");
+  assert.ok(sub.repair, "now carries a repair");
+  assert.equal(sub.repair.restore, 3, "restores the higher-scoring clean neighbor");
+  const out = loopFn(units, keep);
+  assert.ok(out.keep[3], "neighbor restored");
+  assert.ok(
+    !out.findings.some((f) => /shorter than a phrase/.test(f.msg || "")),
+    "re-lint clean after extension",
+  );
+});
+
+test("linter: sub-phrase run with only junk neighbors stays flagged (no garbage resurrection)", () => {
+  const mk = (id, start, dur, flags = []) => ({
+    id, start, end: start + dur, dur, text: "unit " + id,
+    words: [{ w: "x", s: start, e: start + dur }], flags, score: 50,
+  });
+  const units = [
+    mk(0, 0, 5, ["filler"]),
+    mk(1, 6, 0.5),
+    mk(2, 8, 5, ["falseStart"]),
+  ];
+  const keep = [false, true, false];
+  const findings = lintFn(units, keep);
+  const sub = findings.find((f) => /shorter than a phrase/.test(f.msg));
+  assert.ok(sub, "still flagged");
+  assert.ok(!sub.repair, "no repair — both neighbors are junk, human decides");
+});

@@ -281,11 +281,15 @@ async function main() {
     const inter = (S) => [...S].filter((x) => topTruth.has(x)).length / K;
     ptAcc += inter(topBy(units));
     const judge = async (messages) => {
-      const m = messages[1].content.match(/^A \([\d.]+s\): unit (\d+)[\s\S]*B \([\d.]+s\): unit (\d+)/);
-      const a = parseInt(m[1]);
-      const b = parseInt(m[2]);
-      if (R() < 0.1) return { winner: "A" }; // some position bias
-      return { winner: truth.get(a) >= truth.get(b) ? "A" : "B" };
+      const blocks = messages[1].content.split(/\n\n(?=Pair \d+:)/);
+      const winners = blocks.map((blk) => {
+        const m = blk.match(/A \([\d.]+s\): unit (\d+)[\s\S]*B \([\d.]+s\): unit (\d+)/);
+        const a = parseInt(m[1]);
+        const b = parseInt(m[2]);
+        if (R() < 0.1) return "A"; // some position bias
+        return truth.get(a) >= truth.get(b) ? "A" : "B";
+      });
+      return { winners };
     };
     await runTournament(units, judge, { maxBand: n, maxPairs: 60 });
     tnAcc += inter(topBy(units));

@@ -179,3 +179,8 @@ test("parseJsonLoose: handles clean, fenced, trailing-text, and array replies", 
     reason: "a {weird} value",
   });
 });
+
+test("parseJsonLoose: repairs a stray quote after a literal (weak-model output)", () => {
+  assert.deepEqual(parseJsonLoose('{"ok":true"}'), { ok: true });
+  assert.deepEqual(parseJsonLoose('{"scores":[{"id":1,"score":80,}]}'), { scores: [{ id: 1, score: 80 }] });
+});

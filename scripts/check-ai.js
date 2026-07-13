@@ -46,11 +46,15 @@ async function tryGemini() {
     );
     console.log(`\n✓ Gemini WORKS (model auto-picked: ${getResolvedModel()}, ${Date.now() - t0}ms):`, JSON.stringify(res));
   } catch (e) {
-    console.log(`\n✗ Gemini FAILED: ${e.message}`);
+    console.log(`\n✗ Gemini FAILED (model auto-picked: ${getResolvedModel()}): ${e.message}`);
     if (/400/.test(e.message)) console.log("  → key malformed or model name rejected");
     if (/403/.test(e.message)) console.log("  → key invalid/restricted — regenerate at aistudio.google.com");
     if (/404/.test(e.message)) console.log("  → no usable model even after auto-discovery — paste this output to Claude");
     if (/429/.test(e.message)) console.log("  → free-tier quota exhausted right now — try again in a minute");
+    if (/JSON|balanced/.test(e.message))
+      console.log("  → this key's model emits malformed JSON. No problem: the");
+    if (/JSON|balanced/.test(e.message))
+      console.log("    server health-checks Gemini and uses Groq for scoring instead.");
   }
 }
 

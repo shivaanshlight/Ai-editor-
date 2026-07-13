@@ -526,13 +526,36 @@ async function processJob(job) {
     try {
       const { enginePlan } = require("./lib/engine/plan");
       const { chatJSON } = require("./lib/ai");
-      const { geminiChatJSON, geminiAvailable } = require("./lib/gemini");
+      const { geminiChatJSON, geminiAvailable, getResolvedModel } = require("./lib/gemini");
       job.stage = "engine — reading the video";
       saveJob(job);
-      // Fallback ladder: Gemini big-context (whole transcript, one batch,
-      // no chunking) → Groq (small batches) → deterministic-only.
-      const useGemini = geminiAvailable();
+      // Fallback ladder: Gemini big-context (whole transcript in one batch) →
+      // Groq (small batches) → deterministic. A KEY being present is not proof
+      // it WORKS — some key cohorts get weak models that emit malformed JSON.
+      // So health-check Gemini with one tiny call and only trust it if it
+      // returns clean parseable JSON; otherwise fall to Groq (which the
+      // diagnostic already proved works) before ever touching deterministic.
+      let useGemini = geminiAvailable();
+      if (useGemini) {
+        try {
+          const ping = await geminiChatJSON(
+            [
+              { role: "system", content: 'Reply ONLY with JSON: {"ok":true}' },
+              { role: "user", content: "ping" },
+            ],
+            { temperature: 0 },
+          );
+          if (!ping || ping.ok !== true) throw new Error("unexpected ping reply");
+          console.log(`scoring via Gemini (${getResolvedModel()})`);
+        } catch (e) {
+          useGemini = false;
+          console.error(
+            `Gemini unusable (${e.message}) — scoring via Groq instead.`,
+          );
+        }
+      }
       const llm = useGemini ? geminiChatJSON : process.env.GROQ_API_KEY ? chatJSON : null;
+      if (!useGemini && llm) console.log("scoring via Groq (batched)");
       const eng = await enginePlan({
         words: job.words,
         duration: meta.duration,

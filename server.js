@@ -567,8 +567,10 @@ async function processJob(job) {
         cachePath: path.join(UPLOAD_DIR, `${job.id}.scores.json`),
         telemetryPath: path.join(UPLOAD_DIR, "preferences.jsonl"),
         targetDuration: s.targetDuration ? parseFloat(s.targetDuration) : undefined,
-        onProgress: (stage) => {
+        onProgress: (stage, frac) => {
           job.stage = stage;
+          // the engine reports overall planning progress 0..1 — drive the bar
+          if (typeof frac === "number") job.progress = Math.min(99, Math.round(frac * 100));
           saveJob(job);
         },
       });

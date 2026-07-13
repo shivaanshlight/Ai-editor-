@@ -21,16 +21,20 @@ function mkUnit(id, score, dur = 5, text = null) {
   };
 }
 
-/** A judge that knows the TRUE quality and answers head-to-heads correctly. */
+/** A judge that knows the TRUE quality and answers BATCHED head-to-heads. */
 function truthJudge(quality, { positionBias = 0 } = {}) {
   const R = rng(99);
   return async (messages) => {
-    const m = messages[1].content.match(/^A \(([\d.]+)s\): unit (\d+)[\s\S]*B \(([\d.]+)s\): unit (\d+)/);
-    const aId = parseInt(m[2]);
-    const bId = parseInt(m[4]);
-    // position bias: sometimes just says A regardless — order swap must absorb it
-    if (positionBias && R() < positionBias) return { winner: "A" };
-    return { winner: quality.get(aId) >= quality.get(bId) ? "A" : "B" };
+    const blocks = messages[1].content.split(/\n\n(?=Pair \d+:)/);
+    const winners = blocks.map((blk) => {
+      const m = blk.match(/A \([\d.]+s\): unit (\d+)[\s\S]*B \([\d.]+s\): unit (\d+)/);
+      const aId = parseInt(m[1]);
+      const bId = parseInt(m[2]);
+      // position bias: sometimes just says A regardless — order swap must absorb it
+      if (positionBias && R() < positionBias) return "A";
+      return quality.get(aId) >= quality.get(bId) ? "A" : "B";
+    });
+    return { winners };
   };
 }
 

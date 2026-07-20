@@ -589,6 +589,10 @@ async function processJob(job) {
         // Batch must stay Groq-safe: if Gemini dies mid-job the SAME batch size
         // is handed to Groq (smaller context + tighter free-tier token limits).
         batchSize: geminiOk ? 200 : 40,
+        // Diversified scoring passes: 3 on big-quota Gemini, but only 1 on Groq
+        // — its 12k tokens/min free-tier cap can't absorb 3 parallel passes, and
+        // the burst 429s the whole job. One sequential pass stays under the cap.
+        runs: geminiOk ? 3 : 1,
         cachePath: path.join(UPLOAD_DIR, `${job.id}.scores.json`),
         telemetryPath: path.join(UPLOAD_DIR, "preferences.jsonl"),
         targetDuration: s.targetDuration ? parseFloat(s.targetDuration) : undefined,

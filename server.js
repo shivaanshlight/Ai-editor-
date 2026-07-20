@@ -529,14 +529,19 @@ async function processJob(job) {
       const { geminiChatJSON, geminiAvailable, getResolvedModel } = require("./lib/gemini");
       job.stage = "engine — reading the video";
       saveJob(job);
-      // Fallback ladder: Gemini big-context (whole transcript in one batch) →
-      // Groq (small batches) → deterministic. A KEY being present is not proof
-      // it WORKS — some key cohorts get weak models that emit malformed JSON.
-      // So health-check Gemini with one tiny call and only trust it if it
-      // returns clean parseable JSON; otherwise fall to Groq (which the
-      // diagnostic already proved works) before ever touching deterministic.
-      let useGemini = geminiAvailable();
-      if (useGemini) {
+      // Fallback ladder: Gemini big-context → Groq → deterministic. Critically,
+      // the fallback is PER-CALL, not per-job: Gemini's free tier has a small
+      // DAILY quota, so a job can start fine (health-check ping passes) and then
+      // 429 partway through scoring. Previously that dropped the WHOLE job to the
+      // deterministic tier (no AI at all → messy 400+ segment edits). Now a
+      // composite LLM tries Gemini and, the instant it 429s/fails, transparently
+      // continues the rest of the job on Groq — deterministic only if BOTH die.
+      const gemini = geminiAvailable() ? geminiChatJSON : null;
+      const groq = process.env.GROQ_API_KEY ? chatJSON : null;
+
+      // Health-check Gemini once so we know whether it's worth trying first.
+      let geminiOk = false;
+      if (gemini) {
         try {
           const ping = await geminiChatJSON(
             [
@@ -546,16 +551,34 @@ async function processJob(job) {
             { temperature: 0 },
           );
           if (!ping || ping.ok !== true) throw new Error("unexpected ping reply");
-          console.log(`scoring via Gemini (${getResolvedModel()})`);
+          geminiOk = true;
+          console.log(`scoring via Gemini (${getResolvedModel()}) → Groq fallback armed`);
         } catch (e) {
-          useGemini = false;
-          console.error(
-            `Gemini unusable (${e.message}) — scoring via Groq instead.`,
-          );
+          console.error(`Gemini unusable (${e.message}) — scoring via Groq.`);
         }
       }
-      const llm = useGemini ? geminiChatJSON : process.env.GROQ_API_KEY ? chatJSON : null;
-      if (!useGemini && llm) console.log("scoring via Groq (batched)");
+      if (!geminiOk && groq) console.log("scoring via Groq (batched)");
+
+      // Composite: Gemini first (if healthy), Groq on any failure. Once Gemini
+      // fails once (quota), it's marked dead for the rest of this job so we don't
+      // re-pay its slow 429 backoff on every remaining call.
+      let geminiDead = !geminiOk;
+      const llm =
+        !gemini && !groq
+          ? null
+          : async (messages, opts) => {
+              if (gemini && !geminiDead) {
+                try {
+                  return await gemini(messages, opts);
+                } catch (e) {
+                  geminiDead = true;
+                  console.error(`Gemini fell over mid-job (${e.message}) — switching to Groq.`);
+                  if (!groq) throw e;
+                }
+              }
+              if (groq) return await groq(messages, opts);
+              throw new Error("no working LLM provider");
+            };
       const eng = await enginePlan({
         words: job.words,
         duration: meta.duration,
@@ -563,7 +586,9 @@ async function processJob(job) {
         chapters: job.chapters || [],
         mediaPath: job.input,
         llm,
-        batchSize: useGemini ? 600 : 40,
+        // Batch must stay Groq-safe: if Gemini dies mid-job the SAME batch size
+        // is handed to Groq (smaller context + tighter free-tier token limits).
+        batchSize: geminiOk ? 200 : 40,
         cachePath: path.join(UPLOAD_DIR, `${job.id}.scores.json`),
         telemetryPath: path.join(UPLOAD_DIR, "preferences.jsonl"),
         targetDuration: s.targetDuration ? parseFloat(s.targetDuration) : undefined,

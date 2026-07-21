@@ -1515,18 +1515,29 @@ app.get("/api/jobs/:id/repurpose", async (req, res) => {
     await ensureWords(job);
     if (!job.words || !job.words.length)
       return res.status(400).json({ error: "No transcript for this video yet." });
-    // Prefer Gemini big-context: one fast call instead of dozens of Groq
-    // map-reduce calls that rate-limit and make the browser "Failed to fetch".
-    let kitLlm;
+    // Provider ladder for the content kit, preferring LOCAL:
+    //   1. Local LLM (Ollama) — key-free, no limits; chunked map-reduce.
+    //   2. Gemini big-context — one fast call (oneShot); falls back to Groq
+    //      internally if its model is dead/quota'd.
+    //   3. Groq — used automatically when neither of the above is present.
+    let kitLlm, oneShot = false;
     try {
-      const { geminiChatJSON, geminiAvailable } = require("./lib/gemini");
-      if (geminiAvailable()) kitLlm = geminiChatJSON;
+      const localLlm = require("./lib/local-llm");
+      if (await localLlm.available()) {
+        kitLlm = localLlm.chatJSON; // local, chunked, no rate limits
+      } else {
+        const { geminiChatJSON, geminiAvailable } = require("./lib/gemini");
+        if (geminiAvailable()) {
+          kitLlm = geminiChatJSON;
+          oneShot = true;
+        }
+      }
     } catch {}
     const pack = await repurpose(
       { segments: wordsToLines(job.words) },
       { title: job.originalName, duration: job.duration, chapters: job.chapters },
       null,
-      { llm: kitLlm },
+      { llm: kitLlm, oneShot },
     );
     job.repurpose = pack;
     saveJob(job);

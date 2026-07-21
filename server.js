@@ -611,6 +611,9 @@ async function processJob(job) {
         // and Groq's free tier can't absorb the parallel burst anyway. Default
         // to 1 frugal pass; raise SCORING_RUNS later if you want more robustness.
         runs: parseInt(process.env.SCORING_RUNS || "1"),
+        // per-video director's instruction ("keep the makeup steps, cut the
+        // tangents") steers scoring; combined with learned taste below.
+        instruction: s.instruction,
         cachePath: path.join(UPLOAD_DIR, `${job.id}.scores.json`),
         telemetryPath: path.join(UPLOAD_DIR, "preferences.jsonl"),
         targetDuration: s.targetDuration ? parseFloat(s.targetDuration) : undefined,

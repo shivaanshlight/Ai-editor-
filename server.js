@@ -473,10 +473,24 @@ async function processJob(job) {
     job.stage = "";
   }
 
-  // Chapters are a bonus, never a blocker.
+  // Chapters are a bonus, never a blocker — but detectChapters sends the WHOLE
+  // transcript to Groq in one call, which on a long video blows past the free
+  // tier and back-retries for minutes, freezing the pipeline BEFORE planning
+  // (the UI stays stuck on "cached — skipped transcription"). Cap it with a
+  // timeout and move on; the engine's own outline pass also yields chapters, so
+  // dropping these costs nothing.
+  job.stage = "finding chapters";
+  saveJob(job);
   try {
-    job.chapters = await detectChapters(transcript, meta.duration);
-  } catch {
+    const CHAP_MS = parseInt(process.env.CHAPTERS_TIMEOUT_MS || "45000");
+    job.chapters = await Promise.race([
+      detectChapters(transcript, meta.duration),
+      new Promise((_, rej) =>
+        setTimeout(() => rej(new Error("chapter detection timed out")), CHAP_MS),
+      ),
+    ]);
+  } catch (e) {
+    console.error("detectChapters skipped:", e.message);
     job.chapters = [];
   }
 

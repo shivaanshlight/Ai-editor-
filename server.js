@@ -1571,6 +1571,36 @@ app.get("/api/jobs/:id/versions", async (req, res) => {
   }
 });
 
+/**
+ * Download captions as an .srt or .vtt file, timed to the EDITED video when a
+ * render exists (job.segments), else the full transcript. Free — buildSrt
+ * already remaps word timings onto the kept timeline.
+ */
+app.get("/api/jobs/:id/subtitles.:ext(srt|vtt)", async (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).send("Job not found");
+  try {
+    await ensureWords(job);
+    if (!job.words || !job.words.length) return res.status(400).send("No transcript yet");
+    const dur = job.meta?.duration || job.words[job.words.length - 1].end;
+    const segs = job.segments && job.segments.length ? job.segments : [{ start: 0, end: dur }];
+    const srt = buildSrt(job.words, segs) || "";
+    let body = srt;
+    let type = "application/x-subrip";
+    if (req.params.ext === "vtt") {
+      // SRT → VTT: header + comma→dot in timestamps
+      body = "WEBVTT\n\n" + srt.replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, "$1.$2");
+      type = "text/vtt";
+    }
+    const base = String(job.originalName || "subtitles").replace(/\.[^.]+$/, "");
+    res.setHeader("Content-Type", type + "; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${base}.${req.params.ext}"`);
+    res.send(body);
+  } catch (e) {
+    res.status(500).send(e.message);
+  }
+});
+
 /** Seconds → YouTube-chapter timestamp (m:ss, or h:mm:ss past an hour). */
 function fmtTimestamp(sec) {
   sec = Math.max(0, Math.floor(sec || 0));

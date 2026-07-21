@@ -1522,6 +1522,55 @@ app.get("/api/jobs/:id/repurpose", async (req, res) => {
   }
 });
 
+/**
+ * Multiple edit LENGTHS from ONE (cached) scoring pass — tight / balanced /
+ * full. Reuses the cached scores so all three are computed for free, no LLM
+ * calls. Returns each version's EDL + runtime so the UI can offer a one-click
+ * "make it shorter / longer" without re-scoring.
+ */
+app.get("/api/jobs/:id/versions", async (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found." });
+  try {
+    await ensureWords(job);
+    if (!job.words || !job.words.length)
+      return res.status(400).json({ error: "No transcript for this video yet." });
+    const { enginePlan } = require("./lib/engine/plan");
+    const meta = job.meta || {};
+    const presets = [
+      { label: "Tight", keepFraction: 0.45 },
+      { label: "Balanced", keepFraction: 0.65 },
+      { label: "Full", keepFraction: 0.85 },
+    ];
+    const versions = [];
+    for (const pre of presets) {
+      const eng = await enginePlan({
+        words: job.words,
+        duration: meta.duration,
+        utterances: job.speakers || [],
+        chapters: job.chapters || [],
+        llm: null, // cached scores only — zero cost
+        cachePath: path.join(UPLOAD_DIR, `${job.id}.scores.json`),
+        instruction: job.settings?.instruction,
+        telemetryPath: path.join(UPLOAD_DIR, "preferences.jsonl"),
+        keepFraction: pre.keepFraction,
+      });
+      const runtime = eng.keeps.reduce((t, k) => t + (k.end - k.start), 0);
+      versions.push({
+        label: pre.label,
+        keepFraction: pre.keepFraction,
+        runtime,
+        cuts: eng.keeps.length,
+        keeps: eng.keeps,
+        summary: eng.summary,
+      });
+    }
+    res.json({ duration: meta.duration, versions });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 /** Seconds → YouTube-chapter timestamp (m:ss, or h:mm:ss past an hour). */
 function fmtTimestamp(sec) {
   sec = Math.max(0, Math.floor(sec || 0));

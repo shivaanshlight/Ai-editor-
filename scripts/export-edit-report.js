@@ -182,6 +182,24 @@ function clip(str, n) {
   out.push(`⚠️ STRONGEST LINES IT CUT (did it drop something good?) — ${strongestCut.length}:`);
   for (const b of strongestCut)
     out.push(`  [${ts(b.start)}] ${String(b.score).padStart(3)} "${clip(textOf(b), 85)}"${b.reason ? ` — ${b.reason}` : ""}`);
+  // Length options — all free (cached scores), no LLM calls.
+  out.push("");
+  out.push("📏 LENGTH OPTIONS (same scoring, pick your cut):");
+  for (const [name, kf] of [["Tight", 0.45], ["Balanced", 0.65], ["Full", 0.85]]) {
+    const e = await enginePlan({
+      words: job.words,
+      duration,
+      utterances: job.speakers || [],
+      chapters: job.chapters || [],
+      llm: null,
+      cachePath: path.join(UPLOAD_DIR, `${job.id}.scores.json`),
+      keepFraction: kf,
+    }).catch(() => null);
+    if (e) {
+      const rt = e.keeps.reduce((t, k) => t + (k.end - k.start), 0);
+      out.push(`  ${name.padEnd(9)} ${ts(rt)}  (${Math.round((rt / (duration || 1)) * 100)}% of source, ${e.keeps.length} segments)`);
+    }
+  }
   out.push("");
   out.push(`Full line-by-line report written to: ${mdPath}`);
   out.push("=== end ===");

@@ -156,6 +156,8 @@ export default function Workspace({
   const [playing, setPlaying] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [coldOpen, setColdOpen] = useState(false);
+  const [focused, setFocused] = useState<number | null>(null); // keyboard-review cursor (unit id)
+  const [phrase, setPhrase] = useState(""); // "cut this phrase everywhere" query
   // Decision-layer undo: every decision mutation snapshots the previous state.
   const histRef = useRef<WState[]>([]);
   const [histLen, setHistLen] = useState(0);
@@ -344,6 +346,27 @@ export default function Workspace({
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 3200);
   };
+  // Cut this phrase EVERYWHERE: cut every unkept-locked line whose text contains
+  // the phrase, in one go (e.g. remove every "you know" aside across the video).
+  const cutPhrase = () => {
+    const q = phrase.trim().toLowerCase();
+    if (!q) return;
+    const targets = units.filter(
+      (u) => !st.locked[u.id] && status[u.id] !== "cut" && (u.text || "").toLowerCase().includes(q),
+    );
+    const flash = (msg: string) => {
+      setToast(msg);
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      toastTimer.current = setTimeout(() => setToast(null), 3200);
+    };
+    if (!targets.length) return flash(`No kept lines contain “${phrase}”.`);
+    applyDecision((s) => {
+      const overrides = { ...s.overrides };
+      for (const u of targets) overrides[u.id] = "cut";
+      return { ...s, overrides };
+    });
+    flash(`Cut ${targets.length} line${targets.length === 1 ? "" : "s"} containing “${phrase}” — Undo to revert.`);
+  };
   const runRepair = () => {
     // Honest accounting: count what the repair ACTUALLY restores, and say so.
     const restored = repairableCount(units, st);
@@ -359,6 +382,47 @@ export default function Workspace({
   };
   const render = () =>
     onRender(included, {}, job.speakerNames || undefined, coldOpen || undefined);
+
+  // Keyboard review: j/k (or ↓/↑) move the cursor, x cuts/keeps, l locks, space
+  // previews. Editors who live on the keyboard can review a whole video fast.
+  const scrollToUnit = (id: number) => {
+    if (typeof document !== "undefined")
+      document.getElementById(`wu-${id}`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      const k = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && k === "z") return; // handled elsewhere
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const idx = focused == null ? -1 : units.findIndex((u) => u.id === focused);
+      if (k === "j" || e.key === "ArrowDown") {
+        e.preventDefault();
+        const n = units[Math.min(units.length - 1, idx + 1)];
+        if (n) { setFocused(n.id); scrollToUnit(n.id); }
+      } else if (k === "k" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const n = units[Math.max(0, idx < 0 ? 0 : idx - 1)];
+        if (n) { setFocused(n.id); scrollToUnit(n.id); }
+      } else if (k === "x" && focused != null) {
+        e.preventDefault();
+        const u = units.find((x) => x.id === focused);
+        if (u) toggleKeep(u);
+      } else if (k === "l" && focused != null) {
+        e.preventDefault();
+        const u = units.find((x) => x.id === focused);
+        if (u) toggleLock(u);
+      } else if (k === " " && focused != null) {
+        e.preventDefault();
+        const u = units.find((x) => x.id === focused);
+        if (u) seek(u.start);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [units, focused, status, st]);
 
   // Findings split into auto-fixable vs judgment-only; the repair button
   // must never promise fixes it cannot make.
@@ -470,6 +534,21 @@ export default function Workspace({
             )}
           </div>
 
+          {/* text tools: cut a phrase everywhere + keyboard-review hint */}
+          <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 8, padding: "8px 20px", borderBottom: "1px solid var(--hair)", flexWrap: "wrap" }}>
+            <input
+              value={phrase}
+              onChange={(e) => setPhrase(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") cutPhrase(); }}
+              placeholder="Cut a phrase everywhere… e.g. “you know”"
+              style={{ flex: "1 1 220px", minWidth: 150, maxWidth: 320, padding: "6px 10px", borderRadius: 8, border: "1px solid var(--hair-2)", background: "var(--chip)", color: "var(--txt)", fontSize: 12.5, fontFamily: "inherit" }}
+            />
+            <button onClick={cutPhrase} disabled={!phrase.trim()} style={miniBtn(!!phrase.trim())}>Cut everywhere</button>
+            <span style={{ marginLeft: "auto", fontSize: 10.5, color: "var(--txt-3)", whiteSpace: "nowrap" }}>
+              ⌨ <b style={{ color: "var(--txt-2)" }}>j/k</b> move · <b style={{ color: "var(--txt-2)" }}>x</b> cut · <b style={{ color: "var(--txt-2)" }}>l</b> lock
+            </span>
+          </div>
+
           {/* transcript scroll */}
           <div className="tw-scroll" style={{ flex: 1, overflowY: "auto", padding: "6px 12px 20px" }}>
             {groups.map((g) => {
@@ -492,11 +571,14 @@ export default function Workspace({
                     const active = activeUnit?.id === u.id;
                     const finding = findingByUnit.get(u.id);
                     return (
-                      <div key={u.id} className="tw-row" tabIndex={0} onClick={() => seek(u.start)} style={{
+                      <div key={u.id} id={`wu-${u.id}`} className="tw-row" tabIndex={0}
+                        onClick={() => { setFocused(u.id); seek(u.start); }} style={{
                         position: "relative", display: "flex", gap: 12, padding: "10px 12px 10px 14px",
                         borderRadius: 12, cursor: "pointer", alignItems: "flex-start", marginBottom: 1,
                         opacity: isCut ? 0.42 : 1, transform: isCut ? "scale(0.988)" : "scale(1)",
-                        transformOrigin: "left center", background: active ? "var(--accent-soft)" : "transparent",
+                        transformOrigin: "left center",
+                        background: focused === u.id ? "var(--accent-soft)" : active ? "var(--accent-soft)" : "transparent",
+                        boxShadow: focused === u.id ? "inset 0 0 0 1.5px var(--accent)" : "none",
                         transition: "opacity .18s ease, transform .18s cubic-bezier(.2,.8,.2,1), background .15s ease",
                       }}>
                         <div style={{ position: "absolute", left: 0, top: 8, bottom: 8, width: 3, borderRadius: 999, background: active ? "var(--grad)" : "transparent" }} />

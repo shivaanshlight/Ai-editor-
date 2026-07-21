@@ -1,0 +1,379 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ------------------------------------------------------------------ *
+ * edit.ai — "Neo-Tactile" glass design system.
+ * Frosted glass surfaces, neon cyan→blue glow, ambient lit background,
+ * tactile depth. Colors are CSS variables so utilities theme both modes.
+ * ------------------------------------------------------------------ */
+:root,
+:root[data-theme="dark"] {
+  --bg: #070a12;
+  --bg-2: #0c121e;
+  --bg-elev: #0c121e;
+  /* glass fills (translucent, blurred by .card/.glass) */
+  --surface: rgba(18, 26, 42, 0.62);
+  --surface-2: rgba(255, 255, 255, 0.028);
+  --panel: rgba(18, 26, 42, 0.62);
+  --panel-2: rgba(255, 255, 255, 0.028);
+  --solid: #0e1526; /* opaque fallback for selects/options */
+  --line: rgba(255, 255, 255, 0.08);
+  --line-2: rgba(255, 255, 255, 0.15);
+  --hair: rgba(255, 255, 255, 0.08);
+  --hair-2: rgba(255, 255, 255, 0.15);
+  --chip: rgba(255, 255, 255, 0.05);
+  --row-hover: rgba(255, 255, 255, 0.04);
+  --ink: #e7ecf5;
+  --txt: #e7ecf5;
+  --txt-2: rgba(231, 236, 245, 0.6);
+  --txt-3: rgba(231, 236, 245, 0.36);
+  --muted: rgba(231, 236, 245, 0.6);
+  --faint: rgba(231, 236, 245, 0.36);
+  --accent: #38ddf6; /* cyan */
+  --accent-2: #4c8dff; /* blue */
+  --accent-3: #8b7cff; /* violet */
+  --accent-soft: rgba(56, 221, 246, 0.14);
+  --accent-line: rgba(76, 141, 255, 0.5);
+  --accent-ink: #04101f;
+  --grad: linear-gradient(135deg, #38ddf6, #4c8dff 55%, #8b7cff);
+  --good: #34d399;
+  --good-soft: rgba(52, 211, 153, 0.13);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.14);
+  --bad: #fb7185;
+  --bad-soft: rgba(251, 113, 133, 0.13);
+  /* legacy aliases kept so every screen keeps working */
+  --keep: #34d399;
+  --keep-bg: rgba(52, 211, 153, 0.13);
+  --keep-line: rgba(52, 211, 153, 0.4);
+  --cut: #fb7185;
+  --cut-bg: rgba(251, 113, 133, 0.13);
+  --cut-line: rgba(251, 113, 133, 0.38);
+  --mix-bg: rgba(76, 141, 255, 0.16);
+  --mix-line: rgba(76, 141, 255, 0.5);
+  --glass-hi: rgba(255, 255, 255, 0.12); /* top inner highlight */
+  --glow-color: rgba(53, 140, 246, 0.4);
+  --shadow: 0 1px 0 var(--glass-hi) inset, 0 24px 60px -28px rgba(0, 0, 0, 0.85);
+  --glow: 0 0 0 1px rgba(56, 221, 246, 0.25), 0 8px 34px -6px rgba(76, 141, 255, 0.6),
+    0 0 40px -6px rgba(56, 221, 246, 0.45);
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+:root[data-theme="light"] {
+  --bg: #e9edf4;
+  --bg-2: #f5f7fb;
+  --bg-elev: #f5f7fb;
+  --surface: rgba(255, 255, 255, 0.8);
+  --surface-2: rgba(15, 26, 43, 0.02);
+  --panel: rgba(255, 255, 255, 0.8);
+  --panel-2: rgba(15, 26, 43, 0.02);
+  --solid: #ffffff;
+  --line: rgba(15, 26, 43, 0.09);
+  --line-2: rgba(15, 26, 43, 0.17);
+  --hair: rgba(15, 26, 43, 0.09);
+  --hair-2: rgba(15, 26, 43, 0.17);
+  --chip: rgba(15, 26, 43, 0.05);
+  --row-hover: rgba(15, 26, 43, 0.03);
+  --ink: #0e1a2b;
+  --txt: #0e1a2b;
+  --txt-2: rgba(14, 26, 43, 0.62);
+  --txt-3: rgba(14, 26, 43, 0.42);
+  --muted: rgba(14, 26, 43, 0.62);
+  --faint: rgba(14, 26, 43, 0.42);
+  --accent: #0891b2;
+  --accent-2: #2563eb;
+  --accent-3: #7c3aed;
+  --accent-soft: rgba(8, 145, 178, 0.12);
+  --accent-line: rgba(37, 99, 235, 0.55);
+  --accent-ink: #ffffff;
+  --grad: linear-gradient(135deg, #0891b2, #2563eb 55%, #7c3aed);
+  --good: #059669;
+  --good-soft: rgba(5, 150, 105, 0.11);
+  --warn: #b45309;
+  --warn-soft: rgba(180, 83, 9, 0.12);
+  --bad: #e11d48;
+  --bad-soft: rgba(225, 29, 72, 0.09);
+  --keep: #059669;
+  --keep-bg: rgba(5, 150, 105, 0.11);
+  --keep-line: rgba(5, 150, 105, 0.34);
+  --cut: #e11d48;
+  --cut-bg: rgba(225, 29, 72, 0.09);
+  --cut-line: rgba(225, 29, 72, 0.3);
+  --mix-bg: rgba(37, 99, 235, 0.1);
+  --mix-line: rgba(37, 99, 235, 0.36);
+  --glass-hi: rgba(255, 255, 255, 0.7);
+  --glow-color: rgba(37, 99, 235, 0.22);
+  --shadow: 0 1px 0 var(--glass-hi) inset, 0 20px 44px -26px rgba(20, 30, 60, 0.35);
+  --glow: 0 0 0 1px rgba(8, 145, 178, 0.25), 0 10px 30px -8px rgba(37, 99, 235, 0.45);
+}
+
+* {
+  box-sizing: border-box;
+}
+html {
+  -webkit-text-size-adjust: 100%;
+  background: var(--bg);
+}
+body {
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+/* ambient lit background — soft neon blobs floating behind everything */
+body::before {
+  content: "";
+  position: fixed;
+  inset: -25%;
+  z-index: -1;
+  background:
+    radial-gradient(40% 46% at 10% 8%, rgba(55, 224, 255, 0.3), transparent 60%),
+    radial-gradient(44% 48% at 92% 12%, rgba(79, 131, 255, 0.34), transparent 60%),
+    radial-gradient(48% 52% at 82% 94%, rgba(139, 92, 246, 0.26), transparent 62%),
+    radial-gradient(42% 46% at 16% 98%, rgba(11, 210, 230, 0.2), transparent 62%);
+  filter: blur(10px);
+  animation: drift 22s ease-in-out infinite alternate;
+}
+@keyframes drift {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  100% {
+    transform: translate3d(2.5%, -2%, 0) scale(1.06);
+  }
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+::selection {
+  background: color-mix(in srgb, var(--accent-2) 40%, transparent);
+}
+:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border-radius: 99px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+/* ---------- glass primitives ---------- */
+.glass {
+  background: var(--surface);
+  backdrop-filter: blur(22px) saturate(150%);
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+  border: 1px solid var(--line);
+}
+.card {
+  background:
+    linear-gradient(180deg, var(--glass-hi), transparent 22%), var(--surface);
+  backdrop-filter: blur(26px) saturate(160%);
+  -webkit-backdrop-filter: blur(26px) saturate(160%);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--line-2);
+  background: linear-gradient(180deg, var(--glass-hi), transparent 60%),
+    var(--surface);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: var(--ink);
+  padding: 10px 18px;
+  border-radius: 12px;
+  font-weight: 560;
+  font-size: 14px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: border-color 0.18s, transform 0.06s, box-shadow 0.18s, filter 0.18s;
+  white-space: nowrap;
+}
+.btn:hover {
+  border-color: color-mix(in srgb, var(--accent-2) 60%, var(--line-2));
+  box-shadow: 0 0 20px -6px rgba(55, 224, 255, 0.5);
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.btn-primary {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.25), transparent 55%),
+    linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: var(--accent-ink);
+  border-color: transparent;
+  box-shadow: var(--glow);
+  font-weight: 620;
+}
+.btn-primary:hover {
+  filter: brightness(1.08);
+  box-shadow: var(--glow), 0 0 26px -2px rgba(55, 224, 255, 0.6);
+}
+.btn-sm {
+  padding: 8px 13px;
+  font-size: 12.5px;
+  border-radius: 10px;
+}
+.btn-ghost {
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+
+.input {
+  width: 100%;
+  background: var(--surface-2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--ink);
+  padding: 11px 13px;
+  font-size: 14px;
+  transition: border-color 0.18s, box-shadow 0.18s;
+}
+.input::placeholder {
+  color: var(--faint);
+}
+.input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent-2) 70%, transparent);
+  box-shadow: 0 0 0 3px rgba(55, 224, 255, 0.16), 0 0 22px -8px rgba(55, 224, 255, 0.6);
+}
+/* native dropdown menu needs an opaque background */
+select.input option {
+  background: var(--solid);
+  color: var(--ink);
+}
+textarea.input {
+  min-height: 92px;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+.label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+  font-weight: 550;
+}
+
+input[type="range"] {
+  width: 100%;
+  height: 6px;
+  border-radius: 99px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent-2), var(--accent));
+  box-shadow: 0 0 14px -2px rgba(55, 224, 255, 0.8);
+  cursor: pointer;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent-2);
+  border: 2px solid #fff;
+  box-shadow: 0 0 12px rgba(55, 224, 255, 0.8);
+  cursor: pointer;
+}
+
+/* animated progress with neon fill + glow + shimmer */
+.progress-track {
+  position: relative;
+  height: 9px;
+  border-radius: 99px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  box-shadow: 0 0 18px rgba(55, 224, 255, 0.7);
+  transition: width 0.35s ease;
+  position: relative;
+  overflow: hidden;
+}
+.progress-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent);
+  transform: translateX(-100%);
+  animation: shimmer 1.5s infinite;
+}
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* word chips in review / inspector */
+.word {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0 2px;
+  transition: background 0.1s;
+}
+.word:hover {
+  background: color-mix(in srgb, var(--accent-2) 22%, transparent);
+}
+.word.cut {
+  text-decoration: line-through;
+  opacity: 0.38;
+}
+.word.edited {
+  color: var(--accent-2);
+  font-weight: 600;
+}
+
+/* neon divider used to separate content-kit etc. */
+.neon-hr {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--accent-2) 55%, transparent),
+    transparent
+  );
+  border: 0;
+}

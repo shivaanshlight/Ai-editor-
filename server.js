@@ -25,6 +25,7 @@ const {
   buildKeepSegments,
   quantizeSegments,
   cutVideo,
+  planRenderSegments,
 } = require("./lib/silence");
 const {
   transcribeLong,
@@ -473,10 +474,24 @@ async function processJob(job) {
     job.stage = "";
   }
 
-  // Chapters are a bonus, never a blocker.
+  // Chapters are a bonus, never a blocker — but detectChapters sends the WHOLE
+  // transcript to Groq in one call, which on a long video blows past the free
+  // tier and back-retries for minutes, freezing the pipeline BEFORE planning
+  // (the UI stays stuck on "cached — skipped transcription"). Cap it with a
+  // timeout and move on; the engine's own outline pass also yields chapters, so
+  // dropping these costs nothing.
+  job.stage = "finding chapters";
+  saveJob(job);
   try {
-    job.chapters = await detectChapters(transcript, meta.duration);
-  } catch {
+    const CHAP_MS = parseInt(process.env.CHAPTERS_TIMEOUT_MS || "45000");
+    job.chapters = await Promise.race([
+      detectChapters(transcript, meta.duration),
+      new Promise((_, rej) =>
+        setTimeout(() => rej(new Error("chapter detection timed out")), CHAP_MS),
+      ),
+    ]);
+  } catch (e) {
+    console.error("detectChapters skipped:", e.message);
     job.chapters = [];
   }
 
@@ -529,14 +544,19 @@ async function processJob(job) {
       const { geminiChatJSON, geminiAvailable, getResolvedModel } = require("./lib/gemini");
       job.stage = "engine — reading the video";
       saveJob(job);
-      // Fallback ladder: Gemini big-context (whole transcript in one batch) →
-      // Groq (small batches) → deterministic. A KEY being present is not proof
-      // it WORKS — some key cohorts get weak models that emit malformed JSON.
-      // So health-check Gemini with one tiny call and only trust it if it
-      // returns clean parseable JSON; otherwise fall to Groq (which the
-      // diagnostic already proved works) before ever touching deterministic.
-      let useGemini = geminiAvailable();
-      if (useGemini) {
+      // Fallback ladder: Gemini big-context → Groq → deterministic. Critically,
+      // the fallback is PER-CALL, not per-job: Gemini's free tier has a small
+      // DAILY quota, so a job can start fine (health-check ping passes) and then
+      // 429 partway through scoring. Previously that dropped the WHOLE job to the
+      // deterministic tier (no AI at all → messy 400+ segment edits). Now a
+      // composite LLM tries Gemini and, the instant it 429s/fails, transparently
+      // continues the rest of the job on Groq — deterministic only if BOTH die.
+      const gemini = geminiAvailable() ? geminiChatJSON : null;
+      const groq = process.env.GROQ_API_KEY ? chatJSON : null;
+
+      // Health-check Gemini once so we know whether it's worth trying first.
+      let geminiOk = false;
+      if (gemini) {
         try {
           const ping = await geminiChatJSON(
             [
@@ -546,16 +566,34 @@ async function processJob(job) {
             { temperature: 0 },
           );
           if (!ping || ping.ok !== true) throw new Error("unexpected ping reply");
-          console.log(`scoring via Gemini (${getResolvedModel()})`);
+          geminiOk = true;
+          console.log(`scoring via Gemini (${getResolvedModel()}) → Groq fallback armed`);
         } catch (e) {
-          useGemini = false;
-          console.error(
-            `Gemini unusable (${e.message}) — scoring via Groq instead.`,
-          );
+          console.error(`Gemini unusable (${e.message}) — scoring via Groq.`);
         }
       }
-      const llm = useGemini ? geminiChatJSON : process.env.GROQ_API_KEY ? chatJSON : null;
-      if (!useGemini && llm) console.log("scoring via Groq (batched)");
+      if (!geminiOk && groq) console.log("scoring via Groq (batched)");
+
+      // Composite: Gemini first (if healthy), Groq on any failure. Once Gemini
+      // fails once (quota), it's marked dead for the rest of this job so we don't
+      // re-pay its slow 429 backoff on every remaining call.
+      let geminiDead = !geminiOk;
+      const llm =
+        !gemini && !groq
+          ? null
+          : async (messages, opts) => {
+              if (gemini && !geminiDead) {
+                try {
+                  return await gemini(messages, opts);
+                } catch (e) {
+                  geminiDead = true;
+                  console.error(`Gemini fell over mid-job (${e.message}) — switching to Groq.`);
+                  if (!groq) throw e;
+                }
+              }
+              if (groq) return await groq(messages, opts);
+              throw new Error("no working LLM provider");
+            };
       const eng = await enginePlan({
         words: job.words,
         duration: meta.duration,
@@ -563,7 +601,19 @@ async function processJob(job) {
         chapters: job.chapters || [],
         mediaPath: job.input,
         llm,
-        batchSize: useGemini ? 600 : 40,
+        // Batch must stay Groq-safe: if Gemini dies mid-job the SAME batch size
+        // is handed to Groq (smaller context + tighter free-tier token limits).
+        // 150 keeps Gemini's per-reply JSON comfortably under its output cap so
+        // a batch never truncates mid-array.
+        batchSize: geminiOk ? 150 : 40,
+        // Diversified scoring passes. The 3-pass median-merge is a quality
+        // luxury that TRIPLES LLM spend — a bootstrapped budget doesn't need it,
+        // and Groq's free tier can't absorb the parallel burst anyway. Default
+        // to 1 frugal pass; raise SCORING_RUNS later if you want more robustness.
+        runs: parseInt(process.env.SCORING_RUNS || "1"),
+        // per-video director's instruction ("keep the makeup steps, cut the
+        // tangents") steers scoring; combined with learned taste below.
+        instruction: s.instruction,
         cachePath: path.join(UPLOAD_DIR, `${job.id}.scores.json`),
         telemetryPath: path.join(UPLOAD_DIR, "preferences.jsonl"),
         targetDuration: s.targetDuration ? parseFloat(s.targetDuration) : undefined,
@@ -577,7 +627,7 @@ async function processJob(job) {
       // Never fail silently: if the scorer fell down the ladder, say WHY.
       if (eng.scoreError) {
         console.error(
-          `scoring fell back to ${eng.tier} tier (provider: ${useGemini ? "gemini" : "groq"}):`,
+          `scoring fell back to ${eng.tier} tier (provider: ${geminiOk ? "gemini" : "groq"}):`,
           eng.scoreError,
         );
       }
@@ -791,6 +841,14 @@ async function renderJob(job, keeps) {
     if (s.shrinkPauses) keeps = shrinkPauses(keeps, job.words);
   }
   keeps = quantizeSegments(keeps, fps, duration);
+
+  // Dense edits get their closest gaps merged so the render stays on the fast
+  // path. Do it HERE — before captions, keptDuration, and reframe — so every
+  // overlay is timed against the EXACT segment list that gets rendered.
+  // (Merging inside cutVideo instead desynced burned-in captions: they were
+  // built from the un-merged list while the video played the merged one.)
+  // No-op unless the edit exceeds the fast-seek budget for this source path.
+  if (edit) keeps = planRenderSegments(job.input, keeps);
 
   // Soft captions ship as a selectable SRT track (mov_text) — no burn-in; the
   // viewer can toggle them, and they never touch the video pixels. Karaoke ASS
@@ -1443,13 +1501,71 @@ app.get("/api/jobs/:id/repurpose", async (req, res) => {
     await ensureWords(job);
     if (!job.words || !job.words.length)
       return res.status(400).json({ error: "No transcript for this video yet." });
+    // Prefer Gemini big-context: one fast call instead of dozens of Groq
+    // map-reduce calls that rate-limit and make the browser "Failed to fetch".
+    let kitLlm;
+    try {
+      const { geminiChatJSON, geminiAvailable } = require("./lib/gemini");
+      if (geminiAvailable()) kitLlm = geminiChatJSON;
+    } catch {}
     const pack = await repurpose(
       { segments: wordsToLines(job.words) },
       { title: job.originalName, duration: job.duration, chapters: job.chapters },
+      null,
+      { llm: kitLlm },
     );
     job.repurpose = pack;
     saveJob(job);
     res.json({ pack, chapters: chapterLines });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * Multiple edit LENGTHS from ONE (cached) scoring pass — tight / balanced /
+ * full. Reuses the cached scores so all three are computed for free, no LLM
+ * calls. Returns each version's EDL + runtime so the UI can offer a one-click
+ * "make it shorter / longer" without re-scoring.
+ */
+app.get("/api/jobs/:id/versions", async (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found." });
+  try {
+    await ensureWords(job);
+    if (!job.words || !job.words.length)
+      return res.status(400).json({ error: "No transcript for this video yet." });
+    const { enginePlan } = require("./lib/engine/plan");
+    const meta = job.meta || {};
+    const presets = [
+      { label: "Tight", keepFraction: 0.45 },
+      { label: "Balanced", keepFraction: 0.65 },
+      { label: "Full", keepFraction: 0.85 },
+    ];
+    const versions = [];
+    for (const pre of presets) {
+      const eng = await enginePlan({
+        words: job.words,
+        duration: meta.duration,
+        utterances: job.speakers || [],
+        chapters: job.chapters || [],
+        llm: null, // cached scores only — zero cost
+        cachePath: path.join(UPLOAD_DIR, `${job.id}.scores.json`),
+        instruction: job.settings?.instruction,
+        telemetryPath: path.join(UPLOAD_DIR, "preferences.jsonl"),
+        keepFraction: pre.keepFraction,
+      });
+      const runtime = eng.keeps.reduce((t, k) => t + (k.end - k.start), 0);
+      versions.push({
+        label: pre.label,
+        keepFraction: pre.keepFraction,
+        runtime,
+        cuts: eng.keeps.length,
+        keeps: eng.keeps,
+        summary: eng.summary,
+      });
+    }
+    res.json({ duration: meta.duration, versions });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

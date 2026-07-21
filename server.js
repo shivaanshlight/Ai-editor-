@@ -510,13 +510,12 @@ async function processJob(job) {
   job.stage = "finding chapters";
   saveJob(job);
   try {
-    const CHAP_MS = parseInt(process.env.CHAPTERS_TIMEOUT_MS || "45000");
-    job.chapters = await Promise.race([
-      detectChapters(transcript, meta.duration),
-      new Promise((_, rej) =>
-        setTimeout(() => rej(new Error("chapter detection timed out")), CHAP_MS),
-      ),
-    ]);
+    // detectChapters now chunks the transcript and returns whatever it has
+    // gathered when the budget runs out, so a long video gets MOST of its
+    // chapters instead of none. (Each chunk call is also bounded by
+    // GROQ_TIMEOUT_MS, so this can't hang.)
+    const CHAP_MS = parseInt(process.env.CHAPTERS_TIMEOUT_MS || "120000");
+    job.chapters = await detectChapters(transcript, meta.duration, { budgetMs: CHAP_MS });
   } catch (e) {
     console.error("detectChapters skipped:", e.message);
     job.chapters = [];

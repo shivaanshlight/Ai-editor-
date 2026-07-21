@@ -76,7 +76,35 @@ async function tryGroq() {
   }
 }
 
+async function tryLocal() {
+  const ll = require("../lib/local-llm");
+  const ok = await ll.available();
+  if (!ok) {
+    console.log("\nLocal LLM (Ollama): not running.");
+    console.log("  → install from https://ollama.com/download, then: ollama pull qwen2.5:3b");
+    console.log("  Once it's up, scoring runs on your GPU with NO key, quota, or rate limits.");
+    return false;
+  }
+  try {
+    const t0 = Date.now();
+    const res = await ll.chatJSON(
+      [
+        { role: "system", content: 'Reply ONLY with JSON: {"ok":true}' },
+        { role: "user", content: "ping" },
+      ],
+      { temperature: 0 },
+    );
+    console.log(`\n✓ Local LLM WORKS (${ll.modelName()}, ${Date.now() - t0}ms):`, JSON.stringify(res));
+    return true;
+  } catch (e) {
+    console.log(`\n✗ Local LLM (Ollama) is up but errored: ${e.message}`);
+    console.log(`  → is the model pulled?  ollama pull ${ll.modelName()}`);
+    return false;
+  }
+}
+
 (async () => {
+  const localOk = await tryLocal();
   await tryGemini();
   await tryGroq();
   const wl = require("../lib/whisper-local");
@@ -87,11 +115,13 @@ async function tryGroq() {
       : "not installed — npm run setup-whisper",
   );
   console.log("\nWhat the engine will use on the next upload:");
-  const scoring = process.env.GEMINI_API_KEY
-    ? "Gemini big-context"
-    : process.env.GROQ_API_KEY
-      ? "Groq batched"
-      : "deterministic only (no key)";
+  const scoring = localOk
+    ? "local LLM — key-free, no limits ✓"
+    : process.env.GEMINI_API_KEY
+      ? "Gemini"
+      : process.env.GROQ_API_KEY
+        ? "Groq"
+        : "deterministic only (no key)";
   console.log("  Scoring      :", scoring);
   console.log("  Transcription:", wl.available() ? "local whisper.cpp" : "Groq (rate-limited)");
 })();

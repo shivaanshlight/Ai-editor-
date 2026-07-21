@@ -544,52 +544,48 @@ async function processJob(job) {
       const { geminiChatJSON, geminiAvailable, getResolvedModel } = require("./lib/gemini");
       job.stage = "engine — reading the video";
       saveJob(job);
-      // SCORER DEFAULT = GROQ. Its JSON-mode output is reliable; Gemini's JSON
-      // varies wildly across its model zoo — truncation from hidden "thinking",
-      // malformed JSON, rejected config fields, daily quota — and kept dropping
-      // mid-job. So Groq is primary, Gemini is opt-in (SCORER=gemini in .env)
-      // and the automatic fallback if Groq is ever unavailable. No health-check
-      // ping needed: whichever is primary, a failure hands off to the other.
-      const gemini = geminiAvailable() ? geminiChatJSON : null;
-      const groq = process.env.GROQ_API_KEY ? chatJSON : null;
-      const preferGemini = String(process.env.SCORER || "gemini").toLowerCase() !== "groq";
+      // SCORING LADDER, preference-ordered: LOCAL → Gemini → Groq → deterministic.
+      // Local (Ollama on the user's GPU) is best when present — no API key, no
+      // quota, no rate limits, no provider JSON quirks — which is why the app can
+      // ship key-free. Gemini/Groq are cloud fallbacks. Override the head of the
+      // order with SCORER=local|gemini|groq. A failing provider hands off to the
+      // next in the chain (marked dead for the rest of the job).
+      const localLlm = require("./lib/local-llm");
+      const localOk = await localLlm.available();
+      const all = {
+        local: localOk ? { fn: localLlm.chatJSON, label: `local (${localLlm.modelName()})`, batch: 30 } : null,
+        gemini: geminiAvailable() ? { fn: geminiChatJSON, label: `Gemini (${getResolvedModel()})`, batch: 150 } : null,
+        groq: process.env.GROQ_API_KEY ? { fn: chatJSON, label: "Groq (batched)", batch: 40 } : null,
+      };
+      const head = String(process.env.SCORER || (localOk ? "local" : "gemini")).toLowerCase();
+      const order = [head, "local", "gemini", "groq"].filter((k, i, a) => a.indexOf(k) === i);
+      const chain = order.map((k) => all[k]).filter(Boolean);
+      if (chain.length)
+        console.log(`scoring via ${chain[0].label}${chain.length > 1 ? ` (+${chain.length - 1} fallback)` : ""}`);
+      const primaryName = chain.length ? chain[0].label : "deterministic";
 
-      let primary, fallback, primaryName;
-      if (preferGemini && gemini) {
-        primary = gemini;
-        fallback = groq;
-        primaryName = `Gemini (${getResolvedModel()})`;
-      } else if (groq) {
-        primary = groq;
-        fallback = gemini;
-        primaryName = "Groq (batched)";
-      } else {
-        primary = gemini;
-        fallback = null;
-        primaryName = gemini ? `Gemini (${getResolvedModel()})` : "none";
-      }
-      const usingGeminiPrimary = primary === gemini;
-      if (primary) console.log(`scoring via ${primaryName}${fallback ? " — fallback armed" : ""}`);
+      // Batch size safe for EVERY provider in the chain, so a mid-job failover
+      // never hands one provider a batch too big for it.
+      const batchSize = chain.length ? Math.min(...chain.map((c) => c.batch)) : 40;
 
-      // Composite: primary, then fallback on any failure (primary marked dead
-      // for the rest of the job so we don't re-pay a slow retry on every call).
-      let primaryDead = false;
-      const llm =
-        !primary && !fallback
-          ? null
-          : async (messages, opts) => {
-              if (primary && !primaryDead) {
-                try {
-                  return await primary(messages, opts);
-                } catch (e) {
-                  primaryDead = true;
-                  console.error(`${primaryName} scorer failed (${e.message}) — switching to fallback.`);
-                  if (!fallback) throw e;
-                }
+      // Composite: walk the chain, skipping providers that have already failed.
+      const dead = new Set();
+      const llm = !chain.length
+        ? null
+        : async (messages, opts) => {
+            for (let i = 0; i < chain.length; i++) {
+              if (dead.has(i)) continue;
+              try {
+                return await chain[i].fn(messages, opts);
+              } catch (e) {
+                dead.add(i);
+                const nextLabel = chain[i + 1]?.label;
+                if (nextLabel) console.error(`${chain[i].label} failed (${e.message}) — trying ${nextLabel}.`);
+                else throw e;
               }
-              if (fallback) return await fallback(messages, opts);
-              throw new Error("no working LLM provider");
-            };
+            }
+            throw new Error("no working LLM provider");
+          };
       const eng = await enginePlan({
         words: job.words,
         duration: meta.duration,
@@ -597,9 +593,7 @@ async function processJob(job) {
         chapters: job.chapters || [],
         mediaPath: job.input,
         llm,
-        // Gemini can take a bigger batch (huge context); Groq stays small for
-        // its tighter token limits. Whichever is primary sets the batch size.
-        batchSize: usingGeminiPrimary ? 150 : 40,
+        batchSize,
         // Diversified scoring passes. The 3-pass median-merge is a quality
         // luxury that TRIPLES LLM spend — a bootstrapped budget doesn't need it,
         // and Groq's free tier can't absorb the parallel burst anyway. Default

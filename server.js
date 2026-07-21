@@ -608,7 +608,7 @@ async function processJob(job) {
       // Never fail silently: if the scorer fell down the ladder, say WHY.
       if (eng.scoreError) {
         console.error(
-          `scoring fell back to ${eng.tier} tier (provider: ${useGemini ? "gemini" : "groq"}):`,
+          `scoring fell back to ${eng.tier} tier (provider: ${geminiOk ? "gemini" : "groq"}):`,
           eng.scoreError,
         );
       }

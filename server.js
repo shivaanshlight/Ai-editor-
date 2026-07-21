@@ -544,56 +544,48 @@ async function processJob(job) {
       const { geminiChatJSON, geminiAvailable, getResolvedModel } = require("./lib/gemini");
       job.stage = "engine — reading the video";
       saveJob(job);
-      // Fallback ladder: Gemini big-context → Groq → deterministic. Critically,
-      // the fallback is PER-CALL, not per-job: Gemini's free tier has a small
-      // DAILY quota, so a job can start fine (health-check ping passes) and then
-      // 429 partway through scoring. Previously that dropped the WHOLE job to the
-      // deterministic tier (no AI at all → messy 400+ segment edits). Now a
-      // composite LLM tries Gemini and, the instant it 429s/fails, transparently
-      // continues the rest of the job on Groq — deterministic only if BOTH die.
-      const gemini = geminiAvailable() ? geminiChatJSON : null;
-      const groq = process.env.GROQ_API_KEY ? chatJSON : null;
+      // SCORING LADDER, preference-ordered: LOCAL → Gemini → Groq → deterministic.
+      // Local (Ollama on the user's GPU) is best when present — no API key, no
+      // quota, no rate limits, no provider JSON quirks — which is why the app can
+      // ship key-free. Gemini/Groq are cloud fallbacks. Override the head of the
+      // order with SCORER=local|gemini|groq. A failing provider hands off to the
+      // next in the chain (marked dead for the rest of the job).
+      const localLlm = require("./lib/local-llm");
+      const localOk = await localLlm.available();
+      const all = {
+        local: localOk ? { fn: localLlm.chatJSON, label: `local (${localLlm.modelName()})`, batch: 30 } : null,
+        gemini: geminiAvailable() ? { fn: geminiChatJSON, label: `Gemini (${getResolvedModel()})`, batch: 150 } : null,
+        groq: process.env.GROQ_API_KEY ? { fn: chatJSON, label: "Groq (batched)", batch: 40 } : null,
+      };
+      const head = String(process.env.SCORER || (localOk ? "local" : "gemini")).toLowerCase();
+      const order = [head, "local", "gemini", "groq"].filter((k, i, a) => a.indexOf(k) === i);
+      const chain = order.map((k) => all[k]).filter(Boolean);
+      if (chain.length)
+        console.log(`scoring via ${chain[0].label}${chain.length > 1 ? ` (+${chain.length - 1} fallback)` : ""}`);
+      const primaryName = chain.length ? chain[0].label : "deterministic";
 
-      // Health-check Gemini once so we know whether it's worth trying first.
-      let geminiOk = false;
-      if (gemini) {
-        try {
-          const ping = await geminiChatJSON(
-            [
-              { role: "system", content: 'Reply ONLY with JSON: {"ok":true}' },
-              { role: "user", content: "ping" },
-            ],
-            { temperature: 0 },
-          );
-          if (!ping || ping.ok !== true) throw new Error("unexpected ping reply");
-          geminiOk = true;
-          console.log(`scoring via Gemini (${getResolvedModel()}) → Groq fallback armed`);
-        } catch (e) {
-          console.error(`Gemini unusable (${e.message}) — scoring via Groq.`);
-        }
-      }
-      if (!geminiOk && groq) console.log("scoring via Groq (batched)");
+      // Batch size safe for EVERY provider in the chain, so a mid-job failover
+      // never hands one provider a batch too big for it.
+      const batchSize = chain.length ? Math.min(...chain.map((c) => c.batch)) : 40;
 
-      // Composite: Gemini first (if healthy), Groq on any failure. Once Gemini
-      // fails once (quota), it's marked dead for the rest of this job so we don't
-      // re-pay its slow 429 backoff on every remaining call.
-      let geminiDead = !geminiOk;
-      const llm =
-        !gemini && !groq
-          ? null
-          : async (messages, opts) => {
-              if (gemini && !geminiDead) {
-                try {
-                  return await gemini(messages, opts);
-                } catch (e) {
-                  geminiDead = true;
-                  console.error(`Gemini fell over mid-job (${e.message}) — switching to Groq.`);
-                  if (!groq) throw e;
-                }
+      // Composite: walk the chain, skipping providers that have already failed.
+      const dead = new Set();
+      const llm = !chain.length
+        ? null
+        : async (messages, opts) => {
+            for (let i = 0; i < chain.length; i++) {
+              if (dead.has(i)) continue;
+              try {
+                return await chain[i].fn(messages, opts);
+              } catch (e) {
+                dead.add(i);
+                const nextLabel = chain[i + 1]?.label;
+                if (nextLabel) console.error(`${chain[i].label} failed (${e.message}) — trying ${nextLabel}.`);
+                else throw e;
               }
-              if (groq) return await groq(messages, opts);
-              throw new Error("no working LLM provider");
-            };
+            }
+            throw new Error("no working LLM provider");
+          };
       const eng = await enginePlan({
         words: job.words,
         duration: meta.duration,
@@ -601,11 +593,7 @@ async function processJob(job) {
         chapters: job.chapters || [],
         mediaPath: job.input,
         llm,
-        // Batch must stay Groq-safe: if Gemini dies mid-job the SAME batch size
-        // is handed to Groq (smaller context + tighter free-tier token limits).
-        // 150 keeps Gemini's per-reply JSON comfortably under its output cap so
-        // a batch never truncates mid-array.
-        batchSize: geminiOk ? 150 : 40,
+        batchSize,
         // Diversified scoring passes. The 3-pass median-merge is a quality
         // luxury that TRIPLES LLM spend — a bootstrapped budget doesn't need it,
         // and Groq's free tier can't absorb the parallel burst anyway. Default
@@ -627,7 +615,7 @@ async function processJob(job) {
       // Never fail silently: if the scorer fell down the ladder, say WHY.
       if (eng.scoreError) {
         console.error(
-          `scoring fell back to ${eng.tier} tier (provider: ${geminiOk ? "gemini" : "groq"}):`,
+          `scoring fell back to ${eng.tier} tier (primary: ${primaryName}):`,
           eng.scoreError,
         );
       }
@@ -1568,6 +1556,36 @@ app.get("/api/jobs/:id/versions", async (req, res) => {
     res.json({ duration: meta.duration, versions });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * Download captions as an .srt or .vtt file, timed to the EDITED video when a
+ * render exists (job.segments), else the full transcript. Free — buildSrt
+ * already remaps word timings onto the kept timeline.
+ */
+app.get("/api/jobs/:id/subtitles.:ext(srt|vtt)", async (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).send("Job not found");
+  try {
+    await ensureWords(job);
+    if (!job.words || !job.words.length) return res.status(400).send("No transcript yet");
+    const dur = job.meta?.duration || job.words[job.words.length - 1].end;
+    const segs = job.segments && job.segments.length ? job.segments : [{ start: 0, end: dur }];
+    const srt = buildSrt(job.words, segs) || "";
+    let body = srt;
+    let type = "application/x-subrip";
+    if (req.params.ext === "vtt") {
+      // SRT → VTT: header + comma→dot in timestamps
+      body = "WEBVTT\n\n" + srt.replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, "$1.$2");
+      type = "text/vtt";
+    }
+    const base = String(job.originalName || "subtitles").replace(/\.[^.]+$/, "");
+    res.setHeader("Content-Type", type + "; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${base}.${req.params.ext}"`);
+    res.send(body);
+  } catch (e) {
+    res.status(500).send(e.message);
   }
 });
 

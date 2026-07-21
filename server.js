@@ -1498,9 +1498,18 @@ app.get("/api/jobs/:id/repurpose", async (req, res) => {
     await ensureWords(job);
     if (!job.words || !job.words.length)
       return res.status(400).json({ error: "No transcript for this video yet." });
+    // Prefer Gemini big-context: one fast call instead of dozens of Groq
+    // map-reduce calls that rate-limit and make the browser "Failed to fetch".
+    let kitLlm;
+    try {
+      const { geminiChatJSON, geminiAvailable } = require("./lib/gemini");
+      if (geminiAvailable()) kitLlm = geminiChatJSON;
+    } catch {}
     const pack = await repurpose(
       { segments: wordsToLines(job.words) },
       { title: job.originalName, duration: job.duration, chapters: job.chapters },
+      null,
+      { llm: kitLlm },
     );
     job.repurpose = pack;
     saveJob(job);

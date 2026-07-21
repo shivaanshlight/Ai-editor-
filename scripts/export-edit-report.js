@@ -63,18 +63,58 @@ function clip(str, n) {
     process.exit(1);
   }
 
+  // Transcripts are stored separately (keyed by transcript_fp), so a loaded job
+  // usually has empty .words until we fetch it — same as the server's ensureWords.
+  async function loadWords(j) {
+    if (j.words && j.words.length) return j.words;
+    if (j.transcript_fp) {
+      const t = await store.getTranscript(j.transcript_fp).catch(() => null);
+      if (t && t.words && t.words.length) {
+        j.words = t.words;
+        return j.words;
+      }
+    }
+    return [];
+  }
+
+  const listLine = (j) =>
+    `  ${j.id}  [${j.mode || "?"}/${j.status || "?"}]  ${ts(j.meta?.duration || 0)}  ${j.originalName || ""}`;
+  const recent = jobs.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
   const argId = process.argv[2];
+
+  // `list` — just show every job so you can copy an id
+  if (argId === "list" || argId === "--list") {
+    console.log("Your jobs (newest first):\n" + recent.map(listLine).join("\n"));
+    return;
+  }
+
   let job;
   if (argId) {
     job = jobs.find((j) => j.id === argId);
-    if (!job) return console.error(`No job with id ${argId}. Available:\n` + jobs.map((j) => `  ${j.id}  ${j.originalName || ""}`).join("\n"));
+    if (!job) return console.error(`No job with id ${argId}.\nRun 'node scripts/export-edit-report.js list' to see all jobs.`);
   } else {
-    // most recent AI/highlights edit that still has its transcript
-    job = jobs
-      .filter((j) => (j.mode === "ai" || j.mode === "highlights") && j.words && j.words.length)
-      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
-    if (!job) return console.error("No AI edit with a stored transcript found. Pass a job id explicitly.");
+    // most recent AI/highlights edit whose transcript can be loaded
+    const cands = recent.filter((j) => j.mode === "ai" || j.mode === "highlights");
+    for (const c of cands) {
+      if ((await loadWords(c)).length) {
+        job = c;
+        break;
+      }
+    }
+    if (!job)
+      return console.error(
+        "No AI edit with a loadable transcript found.\nAll jobs:\n" +
+          recent.map(listLine).join("\n") +
+          "\n\nPick one and run: node scripts/export-edit-report.js <jobId>",
+      );
   }
+
+  await loadWords(job);
+  if (!job.words || !job.words.length)
+    return console.error(
+      `Job ${job.id} has no stored transcript to rebuild from. Try another id (run 'list').`,
+    );
 
   const duration = job.meta?.duration || 0;
   const s = job.settings || {};

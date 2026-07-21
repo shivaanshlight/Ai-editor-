@@ -2,12 +2,19 @@
  * scripts/setup-whisper.js — one-command local transcription setup.
  *
  *   npm run setup-whisper              (small model, ~466 MB — recommended)
+ *   npm run setup-whisper-gpu          (CUDA build — runs on an NVIDIA GPU)
  *   npm run setup-whisper -- --model=base   (~142 MB, faster, less accurate)
+ *   npm run setup-whisper -- --gpu --model=medium
  *
  * Downloads the whisper.cpp Windows binary (from the official GitHub
  * release) into ./bin and a ggml model (from the official Hugging Face
  * repo) into ./models. After this, transcription is local, free, and has
  * NO rate limits — Groq is only used if these files are missing.
+ *
+ * --gpu fetches the CUDA (cuBLAS) build, which runs on an NVIDIA card (e.g. an
+ * RTX 3050) for ~5-10x faster transcription. It bundles the CUDA runtime DLLs
+ * it needs; you only need a current NVIDIA driver. If the latest release has no
+ * CUDA build, it falls back to the CPU build automatically.
  */
 
 const fs = require("fs");
@@ -47,18 +54,35 @@ async function download(url, dest, label) {
   console.log(`  saved → ${dest}`);
 }
 
-async function latestWindowsAsset() {
+async function latestWindowsAsset(gpu) {
   const res = await fetch("https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest", {
     headers: { "User-Agent": "edit-ai-setup", Accept: "application/vnd.github+json" },
   });
   if (!res.ok) throw new Error(`GitHub API: HTTP ${res.status}`);
   const rel = await res.json();
-  const asset =
-    (rel.assets || []).find((a) => /bin-x64\.zip$/i.test(a.name)) ||
-    (rel.assets || []).find((a) => /win.*x64.*\.zip$/i.test(a.name)) ||
-    (rel.assets || []).find((a) => /x64.*\.zip$/i.test(a.name));
+  const assets = rel.assets || [];
+  const pick = (re) => assets.find((a) => re.test(a.name));
+
+  let asset = null;
+  if (gpu) {
+    // CUDA / cuBLAS build — runs on the NVIDIA GPU.
+    asset = pick(/cublas.*x64\.zip$/i) || pick(/cuda.*x64\.zip$/i);
+    if (!asset)
+      console.log("  ! no CUDA build in the latest release — falling back to the CPU build.");
+  }
+  // CPU build (also the fallback): prefer the plain bin-x64 zip.
+  asset =
+    asset ||
+    pick(/bin-x64\.zip$/i) ||
+    pick(/win.*x64.*\.zip$/i) ||
+    pick(/x64.*\.zip$/i);
   if (!asset) throw new Error("no Windows x64 zip in the latest release — see manual steps below");
-  return { url: asset.browser_download_url, name: asset.name, tag: rel.tag_name };
+  return {
+    url: asset.browser_download_url,
+    name: asset.name,
+    tag: rel.tag_name,
+    isGpu: /cublas|cuda/i.test(asset.name),
+  };
 }
 
 function extractZip(zipPath, destDir) {
@@ -104,14 +128,18 @@ async function main() {
   fs.mkdirSync(BIN, { recursive: true });
   fs.mkdirSync(MODELS, { recursive: true });
 
+  const GPU = process.argv.includes("--gpu") || process.argv.includes("--cuda");
+
   // 1) binary
-  const already = ["whisper-cli.exe", "whisper-cli", "main.exe", "main"]
+  const already = ["whisper-whisper-cli.exe", "whisper-cli.exe", "whisper-cli", "main.exe", "main"]
     .map((f) => path.join(BIN, f))
     .find((p) => fs.existsSync(p));
-  if (already) {
+  // --gpu always (re)fetches, so an existing CPU build gets swapped for the CUDA one.
+  if (already && !GPU) {
     console.log(`✓ whisper binary already present: ${already}`);
   } else if (process.platform === "win32") {
-    const asset = await latestWindowsAsset();
+    if (GPU) console.log("Requesting the CUDA (GPU) build…");
+    const asset = await latestWindowsAsset(GPU);
     const zip = path.join(BIN, asset.name);
     await download(asset.url, zip, `whisper.cpp ${asset.tag} (${asset.name})`);
     extractZip(zip, BIN);
@@ -120,9 +148,24 @@ async function main() {
     // reading the directory — never concurrently with the scan.
     const exe = findExe(BIN, zip);
     if (!exe) throw new Error("binary zip extracted but no whisper-cli.exe/main.exe found");
+    // Bring the binary AND its sibling DLLs (the CUDA runtime lives right next
+    // to the exe) up to BIN root, so whisper-cli.exe finds them at runtime.
+    const exeDir = path.dirname(exe);
+    if (path.resolve(exeDir) !== path.resolve(BIN)) {
+      for (const f of fs.readdirSync(exeDir)) {
+        try {
+          const src = path.join(exeDir, f);
+          if (fs.statSync(src).isFile()) fs.copyFileSync(src, path.join(BIN, f));
+        } catch {}
+      }
+    }
     const target = path.join(BIN, "whisper-cli.exe");
-    if (path.resolve(exe) !== path.resolve(target)) fs.copyFileSync(exe, target);
-    console.log(`✓ binary ready: ${target}`);
+    if (!fs.existsSync(target)) fs.copyFileSync(path.join(BIN, path.basename(exe)), target);
+    console.log(`✓ binary ready: ${target}${asset.isGpu ? "  (CUDA / GPU build ⚡)" : "  (CPU build)"}`);
+    if (GPU && !asset.isGpu)
+      console.log("  Note: CPU build installed (no CUDA build was available). Transcription still works, just on CPU.");
+    if (asset.isGpu)
+      console.log("  The CUDA build uses your NVIDIA GPU automatically. Needs a current NVIDIA driver;\n  the CUDA runtime DLLs are bundled in this zip (kept next to whisper-cli.exe).");
     try {
       fs.unlinkSync(zip);
     } catch {

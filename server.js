@@ -25,6 +25,7 @@ const {
   buildKeepSegments,
   quantizeSegments,
   cutVideo,
+  planRenderSegments,
 } = require("./lib/silence");
 const {
   transcribeLong,
@@ -837,6 +838,14 @@ async function renderJob(job, keeps) {
     if (s.shrinkPauses) keeps = shrinkPauses(keeps, job.words);
   }
   keeps = quantizeSegments(keeps, fps, duration);
+
+  // Dense edits get their closest gaps merged so the render stays on the fast
+  // path. Do it HERE — before captions, keptDuration, and reframe — so every
+  // overlay is timed against the EXACT segment list that gets rendered.
+  // (Merging inside cutVideo instead desynced burned-in captions: they were
+  // built from the un-merged list while the video played the merged one.)
+  // No-op unless the edit exceeds the fast-seek budget for this source path.
+  if (edit) keeps = planRenderSegments(job.input, keeps);
 
   // Soft captions ship as a selectable SRT track (mov_text) — no burn-in; the
   // viewer can toggle them, and they never touch the video pixels. Karaoke ASS

@@ -591,10 +591,11 @@ async function processJob(job) {
         // 150 keeps Gemini's per-reply JSON comfortably under its output cap so
         // a batch never truncates mid-array.
         batchSize: geminiOk ? 150 : 40,
-        // Diversified scoring passes: 3 on big-quota Gemini, but only 1 on Groq
-        // — its 12k tokens/min free-tier cap can't absorb 3 parallel passes, and
-        // the burst 429s the whole job. One sequential pass stays under the cap.
-        runs: geminiOk ? 3 : 1,
+        // Diversified scoring passes. The 3-pass median-merge is a quality
+        // luxury that TRIPLES LLM spend — a bootstrapped budget doesn't need it,
+        // and Groq's free tier can't absorb the parallel burst anyway. Default
+        // to 1 frugal pass; raise SCORING_RUNS later if you want more robustness.
+        runs: parseInt(process.env.SCORING_RUNS || "1"),
         cachePath: path.join(UPLOAD_DIR, `${job.id}.scores.json`),
         telemetryPath: path.join(UPLOAD_DIR, "preferences.jsonl"),
         targetDuration: s.targetDuration ? parseFloat(s.targetDuration) : undefined,

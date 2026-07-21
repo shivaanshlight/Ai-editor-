@@ -12,6 +12,7 @@
     "setup-whisper": "node scripts/setup-whisper.js",
     "setup-whisper-gpu": "node scripts/setup-whisper.js --gpu",
     "shorts": "node scripts/make-shorts.js",
+    "thumbnails": "node scripts/make-thumbnails.js",
     "edit-report": "node scripts/export-edit-report.js"
   },
   "dependencies": {

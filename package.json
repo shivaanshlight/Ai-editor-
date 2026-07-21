@@ -9,7 +9,10 @@
     "dev": "node --watch server.js",
     "test": "node --test test/engine.test.js test/engine-m1.test.js test/engine-m2.test.js test/engine-m3.test.js",
     "bench": "node bench/editbench.js",
-    "setup-whisper": "node scripts/setup-whisper.js"
+    "setup-whisper": "node scripts/setup-whisper.js",
+    "setup-whisper-gpu": "node scripts/setup-whisper.js --gpu",
+    "shorts": "node scripts/make-shorts.js",
+    "edit-report": "node scripts/export-edit-report.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",

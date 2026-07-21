@@ -70,9 +70,36 @@ const upload = multer({
 const jobs = new Map();
 
 /* ---------- persistence: Supabase (jobs survive a restart) ---------- */
+// Coalescing writer: progress ticks call saveJob() many times a second, and
+// firing a full-job Supabase upsert for each one stacks dozens of concurrent
+// multi-KB POSTs — enough to make Node's fetch throw "fetch failed" (socket
+// reset) even on a healthy connection. So we keep AT MOST ONE write in flight
+// per job; any saveJob() calls that arrive mid-write collapse into a single
+// follow-up write once it finishes. Isolated saves still go out immediately.
+const _saveQ = new Map(); // job.id -> { inFlight, pending, job }
+function _runSave(st) {
+  st.inFlight = true;
+  st.pending = false;
+  store
+    .saveJob(st.job)
+    .catch((e) => console.error("saveJob:", e.message))
+    .finally(() => {
+      st.inFlight = false;
+      if (st.pending) setTimeout(() => _runSave(st), 250);
+    });
+}
 function saveJob(job) {
-  // Fire-and-forget upsert; matches the old async-write behavior.
-  store.saveJob(job).catch((e) => console.error("saveJob:", e.message));
+  let st = _saveQ.get(job.id);
+  if (!st) {
+    st = { inFlight: false, pending: false, job };
+    _saveQ.set(job.id, st);
+  }
+  st.job = job; // always persist the latest state
+  if (st.inFlight) {
+    st.pending = true; // a write is running — coalesce into one follow-up
+    return;
+  }
+  _runSave(st);
 }
 
 // Load recent jobs at boot. Jobs interrupted mid-processing fall back to their

@@ -544,54 +544,50 @@ async function processJob(job) {
       const { geminiChatJSON, geminiAvailable, getResolvedModel } = require("./lib/gemini");
       job.stage = "engine — reading the video";
       saveJob(job);
-      // Fallback ladder: Gemini big-context → Groq → deterministic. Critically,
-      // the fallback is PER-CALL, not per-job: Gemini's free tier has a small
-      // DAILY quota, so a job can start fine (health-check ping passes) and then
-      // 429 partway through scoring. Previously that dropped the WHOLE job to the
-      // deterministic tier (no AI at all → messy 400+ segment edits). Now a
-      // composite LLM tries Gemini and, the instant it 429s/fails, transparently
-      // continues the rest of the job on Groq — deterministic only if BOTH die.
+      // SCORER DEFAULT = GROQ. Its JSON-mode output is reliable; Gemini's JSON
+      // varies wildly across its model zoo — truncation from hidden "thinking",
+      // malformed JSON, rejected config fields, daily quota — and kept dropping
+      // mid-job. So Groq is primary, Gemini is opt-in (SCORER=gemini in .env)
+      // and the automatic fallback if Groq is ever unavailable. No health-check
+      // ping needed: whichever is primary, a failure hands off to the other.
       const gemini = geminiAvailable() ? geminiChatJSON : null;
       const groq = process.env.GROQ_API_KEY ? chatJSON : null;
+      const preferGemini = String(process.env.SCORER || "gemini").toLowerCase() !== "groq";
 
-      // Health-check Gemini once so we know whether it's worth trying first.
-      let geminiOk = false;
-      if (gemini) {
-        try {
-          const ping = await geminiChatJSON(
-            [
-              { role: "system", content: 'Reply ONLY with JSON: {"ok":true}' },
-              { role: "user", content: "ping" },
-            ],
-            { temperature: 0 },
-          );
-          if (!ping || ping.ok !== true) throw new Error("unexpected ping reply");
-          geminiOk = true;
-          console.log(`scoring via Gemini (${getResolvedModel()}) → Groq fallback armed`);
-        } catch (e) {
-          console.error(`Gemini unusable (${e.message}) — scoring via Groq.`);
-        }
+      let primary, fallback, primaryName;
+      if (preferGemini && gemini) {
+        primary = gemini;
+        fallback = groq;
+        primaryName = `Gemini (${getResolvedModel()})`;
+      } else if (groq) {
+        primary = groq;
+        fallback = gemini;
+        primaryName = "Groq (batched)";
+      } else {
+        primary = gemini;
+        fallback = null;
+        primaryName = gemini ? `Gemini (${getResolvedModel()})` : "none";
       }
-      if (!geminiOk && groq) console.log("scoring via Groq (batched)");
+      const usingGeminiPrimary = primary === gemini;
+      if (primary) console.log(`scoring via ${primaryName}${fallback ? " — fallback armed" : ""}`);
 
-      // Composite: Gemini first (if healthy), Groq on any failure. Once Gemini
-      // fails once (quota), it's marked dead for the rest of this job so we don't
-      // re-pay its slow 429 backoff on every remaining call.
-      let geminiDead = !geminiOk;
+      // Composite: primary, then fallback on any failure (primary marked dead
+      // for the rest of the job so we don't re-pay a slow retry on every call).
+      let primaryDead = false;
       const llm =
-        !gemini && !groq
+        !primary && !fallback
           ? null
           : async (messages, opts) => {
-              if (gemini && !geminiDead) {
+              if (primary && !primaryDead) {
                 try {
-                  return await gemini(messages, opts);
+                  return await primary(messages, opts);
                 } catch (e) {
-                  geminiDead = true;
-                  console.error(`Gemini fell over mid-job (${e.message}) — switching to Groq.`);
-                  if (!groq) throw e;
+                  primaryDead = true;
+                  console.error(`${primaryName} scorer failed (${e.message}) — switching to fallback.`);
+                  if (!fallback) throw e;
                 }
               }
-              if (groq) return await groq(messages, opts);
+              if (fallback) return await fallback(messages, opts);
               throw new Error("no working LLM provider");
             };
       const eng = await enginePlan({
@@ -601,11 +597,9 @@ async function processJob(job) {
         chapters: job.chapters || [],
         mediaPath: job.input,
         llm,
-        // Batch must stay Groq-safe: if Gemini dies mid-job the SAME batch size
-        // is handed to Groq (smaller context + tighter free-tier token limits).
-        // 150 keeps Gemini's per-reply JSON comfortably under its output cap so
-        // a batch never truncates mid-array.
-        batchSize: geminiOk ? 150 : 40,
+        // Gemini can take a bigger batch (huge context); Groq stays small for
+        // its tighter token limits. Whichever is primary sets the batch size.
+        batchSize: usingGeminiPrimary ? 150 : 40,
         // Diversified scoring passes. The 3-pass median-merge is a quality
         // luxury that TRIPLES LLM spend — a bootstrapped budget doesn't need it,
         // and Groq's free tier can't absorb the parallel burst anyway. Default
@@ -627,7 +621,7 @@ async function processJob(job) {
       // Never fail silently: if the scorer fell down the ladder, say WHY.
       if (eng.scoreError) {
         console.error(
-          `scoring fell back to ${eng.tier} tier (provider: ${geminiOk ? "gemini" : "groq"}):`,
+          `scoring fell back to ${eng.tier} tier (primary: ${primaryName}):`,
           eng.scoreError,
         );
       }

@@ -510,12 +510,26 @@ async function processJob(job) {
   job.stage = "finding chapters";
   saveJob(job);
   try {
-    // detectChapters now chunks the transcript and returns whatever it has
-    // gathered when the budget runs out, so a long video gets MOST of its
-    // chapters instead of none. (Each chunk call is also bounded by
-    // GROQ_TIMEOUT_MS, so this can't hang.)
+    // Chapters run on the LOCAL LLM when Ollama is up (key-free, no rate-limit
+    // stalls); Groq only if it's off. detectChapters chunks the transcript and
+    // returns partial results when the budget runs out. A hard outer race is
+    // kept as a last-resort safety so chapters can NEVER freeze the pipeline —
+    // they're a bonus, never a blocker, so an empty result just moves on.
     const CHAP_MS = parseInt(process.env.CHAPTERS_TIMEOUT_MS || "120000");
-    job.chapters = await detectChapters(transcript, meta.duration, { budgetMs: CHAP_MS });
+    let chapLlm;
+    try {
+      const localLlm = require("./lib/local-llm");
+      if (await localLlm.available()) chapLlm = localLlm.chatJSON;
+    } catch {}
+    job.chapters = await Promise.race([
+      detectChapters(transcript, meta.duration, { budgetMs: CHAP_MS, llm: chapLlm }),
+      new Promise((resolve) =>
+        setTimeout(() => {
+          console.error("detectChapters: hard cap hit — continuing without chapters.");
+          resolve([]);
+        }, CHAP_MS + 15000),
+      ),
+    ]);
   } catch (e) {
     console.error("detectChapters skipped:", e.message);
     job.chapters = [];

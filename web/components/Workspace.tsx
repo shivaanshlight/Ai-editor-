@@ -548,7 +548,7 @@ export default function Workspace({
           {/* floating tightness bar */}
           {scored && (
             <div style={{ flex: "0 0 auto", display: "flex", justifyContent: "center", padding: "0 14px 14px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 18, padding: "10px 14px 10px 12px", borderRadius: 16, background: "var(--panel)", border: "1px solid var(--hair-2)", boxShadow: "0 18px 50px rgba(0,0,0,.4)", backdropFilter: "blur(26px) saturate(150%)", WebkitBackdropFilter: "blur(26px) saturate(150%)" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: 14, rowGap: 10, maxWidth: "100%", padding: "10px 14px 10px 12px", borderRadius: 16, background: "var(--panel)", border: "1px solid var(--hair-2)", boxShadow: "0 18px 50px rgba(0,0,0,.4)", backdropFilter: "blur(26px) saturate(150%)", WebkitBackdropFilter: "blur(26px) saturate(150%)" }}>
                 <div style={{ display: "flex", background: "var(--chip)", borderRadius: 11, padding: 3, gap: 2, border: "1px solid var(--hair)" }}>
                   {(["tighten", "condense"] as Mode[]).map((m) => {
                     const on = st.mode === m;
@@ -562,7 +562,7 @@ export default function Workspace({
                     );
                   })}
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, width: 300 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: "1 1 220px", minWidth: 180, maxWidth: 320 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".11em", textTransform: "uppercase", color: "var(--txt-3)" }}>keep top {keepQuantilePct}%</span>
                     <span style={{ fontSize: 10.5, fontWeight: 600, color: "var(--accent)" }}>{card.cutCount} cuts · {card.cutsPerMin}/min</span>

@@ -166,6 +166,40 @@ function chunkPassages(words, { target = 20, max = 32 } = {}) {
   return out;
 }
 
+/** Rank passages by keyword overlap with the question — no embeddings needed.
+ *  Good enough to pull the right excerpts for "Ask your video" fully offline. */
+const STOP = new Set(
+  ("the a an and or but of to in on at for with is are was were be been being it this that these those i you he she " +
+   "they we my your his her their our me him them us do does did what which who whom how when where why about as").split(" "),
+);
+function terms(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !STOP.has(w));
+}
+function rankPassages(passages, query, k = 8) {
+  const qt = terms(query);
+  if (!qt.length) return passages.slice(0, k); // no keywords → just take the opening
+  const qset = new Set(qt);
+  const scored = passages.map((p) => {
+    const pt = terms(p.text);
+    let hits = 0;
+    for (const w of pt) if (qset.has(w)) hits++;
+    // length-normalized so a long passage doesn't win on volume alone
+    return { p, score: hits / Math.sqrt(pt.length + 1) };
+  });
+  const hasHits = scored.some((s) => s.score > 0);
+  if (!hasHits) return passages.slice(0, k); // question words not found → summarize the start
+  return scored
+    .filter((s) => s.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, k)
+    .sort((a, b) => a.p.start - b.p.start) // chronological for readable citations
+    .map((s) => s.p);
+}
+
 /** Build + store the search index for a job. Non-critical: never blocks a job. */
 async function indexPassages(job, transcript) {
   if (!store.ready) return;
@@ -1280,20 +1314,25 @@ app.get("/api/jobs/:id/ask", async (req, res) => {
   if (!job) return res.status(404).json({ error: "Job not found." });
   const q = String(req.query.q || "").trim();
   if (!q) return res.json({ answer: "", citations: [] });
-  if (!process.env.GROQ_API_KEY)
-    return res.status(400).json({ error: "AI is off — add GROQ_API_KEY to .env." });
-  if (!store.ready)
-    return res.json({ answer: "", citations: [], error: "Chat needs Supabase configured." });
-  if (!job.searchReady) return res.json({ indexing: true, answer: "", citations: [] });
   try {
-    const [vec] = await embed([q]);
-    const passages = await store.searchPassages(job.id, vec, 8);
-    if (!passages.length)
+    // In-memory retrieval over the transcript — NO Supabase, NO embeddings. The
+    // old path needed a Supabase pgvector index (job.searchReady) that never
+    // finished when Supabase was unreachable, so chat hung on "Thinking…".
+    await ensureWords(job);
+    if (!job.words || !job.words.length)
+      return res.json({ answer: "No transcript for this video yet — try again after it finishes.", citations: [] });
+    const passages = chunkPassages(job.words);
+    const top = rankPassages(passages, q, 8);
+    if (!top.length)
       return res.json({ answer: "I couldn't find anything about that in this video.", citations: [] });
-    const out = await answerQuestion(
-      q,
-      passages.map((p) => ({ start: p.start_s, text: p.text })),
-    );
+
+    // Answer with the local LLM when Ollama is up (key-free); else Gemini/Groq.
+    let askLlm;
+    try {
+      const localLlm = require("./lib/local-llm");
+      if (await localLlm.available()) askLlm = localLlm.chatJSON;
+    } catch {}
+    const out = await answerQuestion(q, top, askLlm);
     res.json(out);
   } catch (e) {
     res.json({ answer: "", citations: [], error: e.message });

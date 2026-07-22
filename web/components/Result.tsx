@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Job, Segment, Version } from "@/lib/types";
-import { previewUrl, downloadUrl } from "@/lib/api";
+import { previewUrl, downloadUrl, sourceUrl, fetchWords } from "@/lib/api";
+import { useLivePreview } from "./useLivePreview";
 import { fmt, pct, fmtClock } from "@/lib/format";
 import Timeline, { type TlBlock } from "./Timeline";
 import ContentKit from "./ContentKit";
@@ -38,6 +39,19 @@ export default function Result({
   const [wordEdits, setWordEdits] = useState<Record<number, string>>({});
   const [keeps, setKeeps] = useState<Segment[]>([]);
   const [gains, setGains] = useState<{ start: number; end: number; db: number }[]>([]);
+  const [live, setLive] = useState(true); // live preview vs the last rendered file
+  const [words, setWords] = useState<{ s: number; e: number; w: string }[]>([]);
+  const [caption, setCaption] = useState("");
+
+  // stable source URL (don't remint every render — that would reload the video)
+  const liveSrc = useMemo(() => sourceUrl(job.id), [job.id]);
+  useEffect(() => {
+    let alive = true;
+    fetchWords(job.id).then((w) => alive && setWords(w));
+    return () => {
+      alive = false;
+    };
+  }, [job.id]);
 
   const versions: Version[] = job.versions?.length
     ? job.versions
@@ -47,6 +61,13 @@ export default function Result({
     versions.find((v) => v.v === curVersion)?.segments || job.segments || [];
   const curKept =
     versions.find((v) => v.v === curVersion)?.keptDuration ?? job.keptDuration ?? 0;
+
+  // keeps sorted for the live player; fall back to the rendered version's segs
+  const liveKeeps = useMemo(
+    () => (keeps.length ? [...keeps] : curSegs).slice().sort((a, b) => a.start - b.start),
+    [keeps, curSegs],
+  );
+  useLivePreview(videoRef, liveKeeps, gains, words, live, setCaption);
 
   const blocks: TlBlock[] = useMemo(
     () =>
@@ -76,8 +97,8 @@ export default function Result({
   // moment was cut entirely. This keeps the labels in sync with the video.
   const outChapters = useMemo(() => {
     const list = (job.chapters || [])
-      .map((c) => ({ title: c.title, outT: srcToOut(c.start, curSegs) }))
-      .filter((c): c is { title: string; outT: number } => c.outT !== null && isFinite(c.outT))
+      .map((c) => ({ title: c.title, srcT: c.start, outT: srcToOut(c.start, curSegs) }))
+      .filter((c): c is { title: string; srcT: number; outT: number } => c.outT !== null && isFinite(c.outT))
       .sort((a, b) => a.outT - b.outT);
     // collapse near-duplicate times created when several cut chapters map to the
     // same surviving boundary
@@ -98,13 +119,49 @@ export default function Result({
         <p className="mb-3 text-muted">Editor’s note: {job.summary}</p>
       )}
 
-      <video
-        ref={videoRef}
-        controls
-        playsInline
-        src={previewUrl(job.id, curVersion)}
-        className="max-h-[460px] w-full rounded-xl2 border border-line bg-black"
-      />
+      <div className="relative">
+        <video
+          ref={videoRef}
+          controls
+          playsInline
+          src={live ? liveSrc : previewUrl(job.id, curVersion)}
+          className="max-h-[460px] w-full rounded-xl2 border border-line bg-black"
+        />
+        {/* live caption overlay (only in live mode + when there's text) */}
+        {live && caption && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-[46px] flex justify-center px-4">
+            <span
+              className="rounded-md bg-black/70 px-2.5 py-1 text-center text-[15px] font-semibold text-white"
+              style={{ textShadow: "0 1px 2px rgba(0,0,0,0.9)", maxWidth: "90%" }}
+            >
+              {caption}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* live vs rendered toggle */}
+      <div className="mt-3 flex items-center gap-2">
+        <div className="inline-flex overflow-hidden rounded-full border border-line">
+          <button
+            onClick={() => setLive(true)}
+            className={`px-3 py-1.5 text-[12.5px] ${live ? "bg-[var(--accent)] text-white" : "bg-surface2 text-muted"}`}
+          >
+            ⚡ Live preview
+          </button>
+          <button
+            onClick={() => setLive(false)}
+            className={`px-3 py-1.5 text-[12.5px] ${!live ? "bg-[var(--accent)] text-white" : "bg-surface2 text-muted"}`}
+          >
+            Rendered
+          </button>
+        </div>
+        <span className="text-[11.5px] text-faint">
+          {live
+            ? "Edits play instantly — no render. Cuts, volume & captions are applied live."
+            : "The last exported file. Hit Export to bake in your latest changes."}
+        </span>
+      </div>
 
       {versions.length > 1 && (
         <div className="mt-3.5 flex flex-wrap gap-2">
@@ -152,7 +209,7 @@ export default function Result({
                 key={i}
                 onClick={() => {
                   if (videoRef.current) {
-                    videoRef.current.currentTime = c.outT;
+                    videoRef.current.currentTime = live ? c.srcT : c.outT;
                     videoRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
                   }
                 }}
@@ -173,7 +230,7 @@ export default function Result({
         origin={0}
         dur={job.duration}
         jobDuration={job.duration}
-        mapping="output"
+        mapping={live ? "source" : "output"}
         versionSegs={curSegs}
         videoRef={videoRef}
         wordEdits={wordEdits}
@@ -188,10 +245,11 @@ export default function Result({
           className="btn btn-primary"
           disabled={!keeps.length}
           onClick={() => onRerender(keeps, wordEdits, undefined, undefined, gains)}
+          title="Bake your live edits into a final MP4"
         >
-          Re-render with changes
+          ⤓ Export final video
         </button>
-        <a className="btn" href={downloadUrl(job.id, curVersion)}>Download</a>
+        <a className="btn" href={downloadUrl(job.id, curVersion)}>Download last export</a>
         <button className="btn" onClick={onNew}>New video</button>
       </div>
 

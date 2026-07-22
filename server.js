@@ -1774,6 +1774,22 @@ app.get("/api/source/:id", (req, res) => {
   }
 });
 
+/** Source-timeline word list for the LIVE preview's caption overlay. */
+app.get("/api/jobs/:id/words", async (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found." });
+  try {
+    await ensureWords(job);
+  } catch {}
+  res.json({
+    words: (job.words || []).map((w) => ({
+      s: +(+w.start).toFixed(2),
+      e: +(+w.end).toFixed(2),
+      w: w.word,
+    })),
+  });
+});
+
 /** Local output path for a preview/download request (v<n>.mp4 or c<i>.mp4). */
 function outputFileFor(job, q) {
   const isClip = q.c !== undefined;

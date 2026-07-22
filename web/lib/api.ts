@@ -115,4 +115,16 @@ export const downloadUrl = (id: string, v: number) => `/api/download/${id}?v=${v
 export const clipDownloadUrl = (id: string, i: number) => `/api/download/${id}?c=${i}`;
 export const sourceUrl = (id: string) => `/api/source/${id}?t=${Date.now()}`;
 
+export async function fetchWords(
+  id: string,
+): Promise<{ s: number; e: number; w: string }[]> {
+  try {
+    const res = await fetch(`/api/jobs/${id}/words`);
+    const d = await res.json();
+    return Array.isArray(d.words) ? d.words : [];
+  } catch {
+    return [];
+  }
+}
+
 export type { Chapter };

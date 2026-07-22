@@ -593,7 +593,7 @@ async function processJob(job) {
       const localLlm = require("./lib/local-llm");
       const localOk = await localLlm.available();
       const all = {
-        local: localOk ? { fn: localLlm.chatJSON, label: `local (${localLlm.modelName()})`, batch: 30 } : null,
+        local: localOk ? { fn: localLlm.chatJSON, label: `local (${localLlm.modelName()})`, batch: parseInt(process.env.LOCAL_LLM_BATCH || "12") } : null,
         gemini: geminiAvailable() ? { fn: geminiChatJSON, label: `Gemini (${getResolvedModel()})`, batch: 150 } : null,
         groq: process.env.GROQ_API_KEY ? { fn: chatJSON, label: "Groq (batched)", batch: 40 } : null,
       };

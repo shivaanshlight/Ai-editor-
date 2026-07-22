@@ -593,7 +593,7 @@ async function processJob(job) {
       const localLlm = require("./lib/local-llm");
       const localOk = await localLlm.available();
       const all = {
-        local: localOk ? { fn: localLlm.chatJSON, label: `local (${localLlm.modelName()})`, batch: parseInt(process.env.LOCAL_LLM_BATCH || "12") } : null,
+        local: localOk ? { fn: localLlm.chatJSON, label: `local (${localLlm.modelName()})`, batch: parseInt(process.env.LOCAL_LLM_BATCH || "24") } : null,
         gemini: geminiAvailable() ? { fn: geminiChatJSON, label: `Gemini (${getResolvedModel()})`, batch: 150 } : null,
         groq: process.env.GROQ_API_KEY ? { fn: chatJSON, label: "Groq (batched)", batch: 40 } : null,
       };
@@ -608,23 +608,42 @@ async function processJob(job) {
       // never hands one provider a batch too big for it.
       const batchSize = chain.length ? Math.min(...chain.map((c) => c.batch)) : 40;
 
-      // Composite: walk the chain, skipping providers that have already failed.
+      // Composite scorer that MUST complete a long job on a slow local model.
+      // Key rules:
+      //  • A transient failure (timeout / rate-limit / network) is RETRIED on
+      //    the same provider — a slow call is not a broken provider. Local
+      //    stays primary for every batch; one slow call never demotes it.
+      //  • Only a HARD error (404 / auth / bad request) marks a provider dead
+      //    for the rest of the job.
+      //  • So a 2-hour video no longer collapses to deterministic because a
+      //    single call was slow.
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const transient = (m = "") =>
+        /timeout|aborted|abort|ECONN|network|fetch failed|socket|429|rate.?limit|502|503|504|overload/i.test(m);
       const dead = new Set();
       const llm = !chain.length
         ? null
         : async (messages, opts) => {
+            let lastErr;
             for (let i = 0; i < chain.length; i++) {
               if (dead.has(i)) continue;
-              try {
-                return await chain[i].fn(messages, opts);
-              } catch (e) {
-                dead.add(i);
-                const nextLabel = chain[i + 1]?.label;
-                if (nextLabel) console.error(`${chain[i].label} failed (${e.message}) — trying ${nextLabel}.`);
-                else throw e;
+              for (let attempt = 0; attempt < 3; attempt++) {
+                try {
+                  return await chain[i].fn(messages, opts);
+                } catch (e) {
+                  lastErr = e;
+                  if (transient(e.message) && attempt < 2) {
+                    await sleep(1500 * (attempt + 1)); // let the model catch up, retry same provider
+                    continue;
+                  }
+                  if (!transient(e.message)) dead.add(i); // hard error → don't use again
+                  const nextLabel = chain[i + 1]?.label;
+                  if (nextLabel) console.error(`${chain[i].label} failed (${e.message}) — trying ${nextLabel}.`);
+                  break; // move to the next provider for this batch only
+                }
               }
             }
-            throw new Error("no working LLM provider");
+            throw lastErr || new Error("no working LLM provider");
           };
       const eng = await enginePlan({
         words: job.words,

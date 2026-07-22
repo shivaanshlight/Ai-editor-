@@ -1033,6 +1033,7 @@ async function renderJob(job, keeps) {
       musicPath: edit && s.musicPath ? path.resolve(s.musicPath) : null,
       musicVol: s.musicVol,
       enhanceAudio: s.enhanceAudio,
+      gains: job.gainRegions || null,
       cwd: OUTPUT_DIR,
     },
   );
@@ -1313,6 +1314,18 @@ app.post("/api/jobs/:id/render", async (req, res) => {
       if (typeof v === "string" && v.trim())
         names[String(k)] = v.trim().slice(0, 40);
     job.speakerNames = names;
+  }
+
+  // Per-clip audio gain from the timeline's draggable waveform (source-time
+  // regions {start,end,db}); applied per segment in cutVideo.
+  if (Array.isArray(req.body.gains)) {
+    job.gainRegions = req.body.gains
+      .map((g) => ({
+        start: Math.max(0, +g.start || 0),
+        end: Math.min(job.meta.duration, +g.end || 0),
+        db: Math.max(-30, Math.min(30, +g.db || 0)),
+      }))
+      .filter((g) => g.end > g.start && g.db);
   }
 
   job.progress = 0;

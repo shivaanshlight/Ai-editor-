@@ -24,13 +24,20 @@ export default function Result({
   onNew,
 }: {
   job: Job;
-  onRerender: (included: Segment[], wordEdits: Record<number, string>) => void;
+  onRerender: (
+    included: Segment[],
+    wordEdits: Record<number, string>,
+    speakerNames?: Record<string, string>,
+    coldOpen?: boolean,
+    gains?: { start: number; end: number; db: number }[],
+  ) => void;
   onNew: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [curVersion, setCurVersion] = useState(job.version || 1);
   const [wordEdits, setWordEdits] = useState<Record<number, string>>({});
   const [keeps, setKeeps] = useState<Segment[]>([]);
+  const [gains, setGains] = useState<{ start: number; end: number; db: number }[]>([]);
 
   const versions: Version[] = job.versions?.length
     ? job.versions
@@ -172,6 +179,7 @@ export default function Result({
         wordEdits={wordEdits}
         onWordEdit={(i, v) => setWordEdits((p) => ({ ...p, [i]: v }))}
         onKeepsChange={setKeeps}
+        onGainsChange={setGains}
         jobId={job.id}
       />
 
@@ -179,7 +187,7 @@ export default function Result({
         <button
           className="btn btn-primary"
           disabled={!keeps.length}
-          onClick={() => onRerender(keeps, wordEdits)}
+          onClick={() => onRerender(keeps, wordEdits, undefined, undefined, gains)}
         >
           Re-render with changes
         </button>

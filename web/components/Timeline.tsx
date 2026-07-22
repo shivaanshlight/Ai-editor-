@@ -16,11 +16,13 @@ export interface TlBlock {
   end: number;
   type: "keep" | "cut";
   words: { i: number; w: string }[];
+  gainDb?: number; // per-clip audio gain from dragging the waveform up/down
 }
 
 type Mapping = "output" | "source";
 
 const MIN = 0.12;
+const GAIN_RANGE = 18; // dB mapped across the clip height (±)
 
 export default function Timeline({
   blocks: initialBlocks,
@@ -33,6 +35,7 @@ export default function Timeline({
   wordEdits,
   onWordEdit,
   onKeepsChange,
+  onGainsChange,
   jobId,
 }: {
   blocks: TlBlock[];
@@ -45,6 +48,7 @@ export default function Timeline({
   wordEdits: Record<number, string>;
   onWordEdit: (i: number, v: string) => void;
   onKeepsChange: (keeps: Segment[]) => void;
+  onGainsChange?: (gains: { start: number; end: number; db: number }[]) => void;
   jobId?: string;
 }) {
   const [blocks, setBlocks] = useState<TlBlock[]>(initialBlocks);
@@ -67,6 +71,7 @@ export default function Timeline({
     | { idx: number; side: "l" | "r"; x0: number; s0: number; e0: number }
     | null
   >(null);
+  const gainDrag = useRef<{ idx: number; y0: number; g0: number } | null>(null);
 
   // Re-seed when the parent hands a new set of blocks (new job / new clip).
   useEffect(() => {
@@ -132,15 +137,19 @@ export default function Timeline({
     const accent = (css.getPropertyValue("--accent") || "#5b8cff").trim();
     const dim = (css.getPropertyValue("--line2") || "rgba(255,255,255,0.18)").trim();
     const mid = WAVE_H / 2;
-    const keepAt = (t: number) => blocks.some((b) => b.type === "keep" && t >= b.start && t <= b.end);
+    const blockAt = (t: number) => blocks.find((b) => t >= b.start && t <= b.end);
     for (let x = 0; x < w; x++) {
       const srcT = origin + (scrollLeft + x) / pps;
       if (srcT < 0 || srcT > total) continue;
       const idx = Math.min(peaks.length - 1, Math.floor((srcT / total) * peaks.length));
       const amp = peaks[idx] || 0;
-      const h = Math.max(0.5, amp * (WAVE_H - 6));
-      ctx.fillStyle = keepAt(srcT) ? accent : dim;
-      ctx.globalAlpha = keepAt(srcT) ? 0.55 : 0.3;
+      const b = blockAt(srcT);
+      const keep = b?.type === "keep";
+      // scale the drawn waveform by the clip's gain so louder clips look taller
+      const gainFactor = keep && b?.gainDb ? Math.pow(10, (b.gainDb as number) / 20) : 1;
+      const h = Math.min(WAVE_H - 2, Math.max(0.5, amp * gainFactor * (WAVE_H - 6)));
+      ctx.fillStyle = keep ? accent : dim;
+      ctx.globalAlpha = keep ? 0.55 : 0.3;
       ctx.fillRect(x, mid - h / 2, 1, h);
     }
     ctx.globalAlpha = 1;
@@ -164,6 +173,16 @@ export default function Timeline({
       blocks.filter((b) => b.type === "keep").map((b) => ({ start: b.start, end: b.end })),
     );
   }, [blocks, onKeepsChange]);
+
+  // publish per-clip gain regions (only clips actually adjusted)
+  useEffect(() => {
+    if (!onGainsChange) return;
+    onGainsChange(
+      blocks
+        .filter((b) => b.type === "keep" && b.gainDb)
+        .map((b) => ({ start: b.start, end: b.end, db: b.gainDb as number })),
+    );
+  }, [blocks, onGainsChange]);
 
   // preserve the on-screen anchor across a zoom change
   useLayoutEffect(() => {
@@ -285,6 +304,26 @@ export default function Timeline({
   };
   const endTrim = () => (trim.current = null);
 
+  /* ---------- per-clip gain (drag the waveform up/down) ---------- */
+  const startGain = (e: React.PointerEvent, idx: number) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setSel(idx);
+    gainDrag.current = { idx, y0: e.clientY, g0: blocks[idx].gainDb || 0 };
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const onGainMove = (e: React.PointerEvent) => {
+    const g = gainDrag.current;
+    if (!g) return;
+    // drag UP = louder. 54px of clip height maps to the full ±GAIN_RANGE.
+    const dy = e.clientY - g.y0;
+    const db = Math.max(-GAIN_RANGE, Math.min(GAIN_RANGE, g.g0 - (dy / 54) * GAIN_RANGE));
+    setBlocks((prev) => prev.map((b, i) => (i === g.idx ? { ...b, gainDb: Math.round(db * 10) / 10 } : b)));
+  };
+  const endGain = () => (gainDrag.current = null);
+  const resetGain = (idx: number) =>
+    setBlocks((prev) => prev.map((b, i) => (i === idx ? { ...b, gainDb: 0 } : b)));
+
   /* ---------- split / delete / undo ---------- */
   const doSplit = () => {
     const i = blocks.findIndex((b) => phSrc > b.start + MIN && phSrc < b.end - MIN);
@@ -368,7 +407,7 @@ export default function Timeline({
       <div className="mb-2.5 mt-6 flex items-baseline gap-2.5">
         <b className="text-[11px] font-bold uppercase tracking-[0.09em] text-muted">Timeline</b>
         <span className="text-[12px] text-faint">
-          click or drag to scrub · trim edges · split · delete
+          scrub · trim edges · split · delete · drag the clip’s line up/down for volume
         </span>
       </div>
 
@@ -450,6 +489,40 @@ export default function Timeline({
                       className="absolute right-0 top-0 z-[2] h-full w-3 cursor-ew-resize rounded-r-[7px]"
                       style={{ touchAction: "none" }}
                     />
+                    {/* draggable audio-gain line (drag up = louder) */}
+                    <div
+                      data-handle="1"
+                      title="Drag up/down to change this clip's volume · double-click to reset"
+                      onPointerDown={(e) => startGain(e, i)}
+                      onPointerMove={onGainMove}
+                      onPointerUp={endGain}
+                      onPointerCancel={endGain}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        resetGain(i);
+                      }}
+                      className="absolute left-3 right-3 z-[2] cursor-ns-resize"
+                      style={{
+                        top: 27 - Math.max(-27, Math.min(27, ((b.gainDb || 0) / GAIN_RANGE) * 24)),
+                        height: 10,
+                        marginTop: -5,
+                        touchAction: "none",
+                      }}
+                    >
+                      <div
+                        className="pointer-events-none absolute left-0 right-0 top-1/2 h-[2px] -translate-y-1/2 rounded"
+                        style={{ background: b.gainDb ? "var(--accent-2, #6ee7ff)" : "color-mix(in srgb, var(--accent) 55%, transparent)" }}
+                      />
+                    </div>
+                    {!!b.gainDb && (
+                      <span
+                        className="mono pointer-events-none absolute right-1 top-0.5 z-[2] rounded bg-[var(--surface)] px-1 text-[9.5px]"
+                        style={{ color: "var(--accent-2, #6ee7ff)" }}
+                      >
+                        {(b.gainDb as number) > 0 ? "+" : ""}
+                        {(b.gainDb as number).toFixed(1)} dB
+                      </span>
+                    )}
                   </div>
                 );
               }

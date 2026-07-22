@@ -33,6 +33,7 @@ export default function Timeline({
   wordEdits,
   onWordEdit,
   onKeepsChange,
+  jobId,
 }: {
   blocks: TlBlock[];
   origin: number;
@@ -44,6 +45,7 @@ export default function Timeline({
   wordEdits: Record<number, string>;
   onWordEdit: (i: number, v: string) => void;
   onKeepsChange: (keeps: Segment[]) => void;
+  jobId?: string;
 }) {
   const [blocks, setBlocks] = useState<TlBlock[]>(initialBlocks);
   const [sel, setSel] = useState(-1);
@@ -53,8 +55,12 @@ export default function Timeline({
   const undo = useRef<TlBlock[][]>([]);
   const [, forceUndo] = useState(0);
 
+  const [peaks, setPeaks] = useState<number[]>([]);
+  const [wavDur, setWavDur] = useState(0);
+
   const wrapRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
+  const waveRef = useRef<HTMLCanvasElement>(null);
   const pending = useRef<{ anchor: number; screenX: number } | null>(null);
   const scrubbing = useRef(false);
   const trim = useRef<
@@ -82,6 +88,75 @@ export default function Timeline({
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
   }, []);
+
+  // Fetch the audio waveform peaks once per job (computed server-side w/ ffmpeg).
+  useEffect(() => {
+    if (!jobId) return;
+    let alive = true;
+    fetch(`/api/jobs/${jobId}/waveform`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (!alive || !Array.isArray(d.peaks)) return;
+        setPeaks(d.peaks);
+        setWavDur(d.duration || jobDuration || 0);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [jobId, jobDuration]);
+
+  // Draw only the VISIBLE window of the waveform onto a viewport-sized canvas
+  // (canvases have a max width, so we can't size one to a zoomed-in multi-hour
+  // timeline). Bright bars under kept spans, dim under cuts — like a real NLE.
+  const WAVE_H = 62;
+  const drawWave = useCallback(() => {
+    const cv = waveRef.current;
+    const wrap = wrapRef.current;
+    if (!cv || !wrap) return;
+    const scrollLeft = wrap.scrollLeft;
+    const dpr = window.devicePixelRatio || 1;
+    const w = wrapW;
+    cv.width = Math.max(1, Math.floor(w * dpr));
+    cv.height = Math.floor(WAVE_H * dpr);
+    cv.style.width = w + "px";
+    cv.style.height = WAVE_H + "px";
+    cv.style.transform = `translateX(${scrollLeft}px)`; // keep it over the viewport
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, WAVE_H);
+    if (!peaks.length) return;
+    const total = wavDur || span || 1;
+    const css = getComputedStyle(document.documentElement);
+    const accent = (css.getPropertyValue("--accent") || "#5b8cff").trim();
+    const dim = (css.getPropertyValue("--line2") || "rgba(255,255,255,0.18)").trim();
+    const mid = WAVE_H / 2;
+    const keepAt = (t: number) => blocks.some((b) => b.type === "keep" && t >= b.start && t <= b.end);
+    for (let x = 0; x < w; x++) {
+      const srcT = origin + (scrollLeft + x) / pps;
+      if (srcT < 0 || srcT > total) continue;
+      const idx = Math.min(peaks.length - 1, Math.floor((srcT / total) * peaks.length));
+      const amp = peaks[idx] || 0;
+      const h = Math.max(0.5, amp * (WAVE_H - 6));
+      ctx.fillStyle = keepAt(srcT) ? accent : dim;
+      ctx.globalAlpha = keepAt(srcT) ? 0.55 : 0.3;
+      ctx.fillRect(x, mid - h / 2, 1, h);
+    }
+    ctx.globalAlpha = 1;
+  }, [peaks, wavDur, span, origin, pps, wrapW, blocks]);
+
+  // redraw on zoom / data / block changes, and on horizontal scroll
+  useEffect(() => {
+    drawWave();
+  }, [drawWave]);
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const onScroll = () => drawWave();
+    wrap.addEventListener("scroll", onScroll, { passive: true });
+    return () => wrap.removeEventListener("scroll", onScroll);
+  }, [drawWave]);
 
   // keep the parent's keep-list in sync
   useEffect(() => {
@@ -330,6 +405,12 @@ export default function Timeline({
 
           {/* track */}
           <div className="relative mt-2 h-[62px]">
+            {/* waveform layer (follows scroll via transform) */}
+            <canvas
+              ref={waveRef}
+              className="pointer-events-none absolute left-0 top-0 z-0"
+              style={{ height: WAVE_H }}
+            />
             {blocks.map((b, i) => {
               const left = (b.start - origin) * pps;
               const width = Math.max((b.end - b.start) * pps, 9);
@@ -338,7 +419,7 @@ export default function Timeline({
                   <div
                     key={i}
                     onPointerDown={() => setSel(i)}
-                    className={`absolute top-1 h-[54px] cursor-pointer rounded-[7px] border ${
+                    className={`absolute top-1 z-[1] h-[54px] cursor-pointer rounded-[7px] border ${
                       i === sel
                         ? "border-[var(--accent)] outline outline-2 outline-[var(--accent)]"
                         : "border-[var(--accent)]"
@@ -346,8 +427,9 @@ export default function Timeline({
                     style={{
                       left,
                       width,
+                      // translucent so the waveform underneath shows through
                       background:
-                        "linear-gradient(180deg, color-mix(in srgb, var(--accent) 26%, var(--surface)), var(--surface))",
+                        "linear-gradient(180deg, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, var(--accent) 6%, transparent))",
                     }}
                   >
                     <div

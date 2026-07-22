@@ -44,6 +44,7 @@ const {
   extractAudio,
   extractAudioFull,
   extractAudioChunked,
+  computeWaveform,
   buildSrt,
   buildAss,
   buildLowerThirds,
@@ -1336,6 +1337,24 @@ app.get("/api/jobs/:id/ask", async (req, res) => {
     res.json(out);
   } catch (e) {
     res.json({ answer: "", citations: [], error: e.message });
+  }
+});
+
+/** Audio waveform peaks for the timeline (computed locally with ffmpeg, cached
+ *  in memory). Powers the Premiere-style waveform under the clips. */
+app.get("/api/jobs/:id/waveform", async (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found." });
+  if (job.waveform) return res.json({ peaks: job.waveform, duration: job.duration });
+  try {
+    await ensureLocalSource(job);
+    // ~4 buckets/sec, capped so a multi-hour video stays a small payload.
+    const buckets = Math.min(8000, Math.max(600, Math.round((job.duration || 0) * 4)));
+    const peaks = await computeWaveform(job.input, buckets);
+    job.waveform = peaks; // in-memory cache (recomputed from the on-disk source after a restart)
+    res.json({ peaks, duration: job.duration });
+  } catch (e) {
+    res.json({ peaks: [], error: e.message });
   }
 });
 

@@ -148,6 +148,7 @@ export default function Result({
         wordEdits={wordEdits}
         onWordEdit={(i, v) => setWordEdits((p) => ({ ...p, [i]: v }))}
         onKeepsChange={setKeeps}
+        jobId={job.id}
       />
 
       <div className="mt-5 flex flex-wrap gap-2.5">

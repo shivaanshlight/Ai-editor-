@@ -193,3 +193,40 @@ test("enginePlan: server-shaped words → rich review blocks + junk cut", async 
   for (const [a, b] of junkRanges) if (keptTime((a + b) / 2)) junkKept++;
   assert.ok(junkKept <= 1, `junk mostly cut (kept ${junkKept}/${junkRanges.length})`);
 });
+
+/* ---------------- embedding + signals scorer (default tier) --------------- */
+const { scoreByEmbedding } = require("../lib/engine/embed-score");
+
+// deterministic fake embedder: char-code buckets → 16-dim vector
+function fakeEmbed(texts) {
+  return texts.map((t) => {
+    const v = new Array(16).fill(0);
+    for (let i = 0; i < t.length; i++) v[i % 16] += t.charCodeAt(i);
+    return v;
+  });
+}
+
+test("embed scorer: junk floored, content ranked, laughter boosted", async () => {
+  const units = [
+    { id: 0, text: "Today I want to talk about learning Blender for 3D animation", flags: [], energyZ: 0.5 },
+    { id: 1, text: "um uh you know like", flags: ["filler"], energyZ: -1 },
+    { id: 2, text: "Blender is powerful for animation and modeling", flags: [], energyZ: 0.8, highEnergy: true },
+    { id: 3, text: "and that was really funny haha", flags: ["laugh"], energyZ: 1.2 },
+    { id: 4, text: "yeah", flags: [], energyZ: -1.5, deadEnergy: true },
+  ];
+  const map = await scoreByEmbedding(units, { embed: fakeEmbed });
+  assert.equal(map.size, units.length, "every unit scored");
+  assert.ok(units[1].score <= 12, "filler floored to junk");
+  assert.ok(units[0].score >= 50, "substantive intro kept high");
+  assert.ok(units[3].moment === true, "laughter marked as a moment");
+  assert.ok(units[4].score < units[2].score, "dead-air below lively content");
+});
+
+test("embed scorer: instruction steers relevance", async () => {
+  const units = [
+    { id: 0, text: "pricing and cost of the subscription plan", flags: [], energyZ: 0 },
+    { id: 1, text: "the weather was nice on the drive over", flags: [], energyZ: 0 },
+  ];
+  const map = await scoreByEmbedding(units, { embed: fakeEmbed, preferenceText: "keep the pricing discussion" });
+  assert.equal(map.size, 2);
+});

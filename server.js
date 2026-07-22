@@ -680,12 +680,18 @@ async function processJob(job) {
             }
             throw lastErr || new Error("no working LLM provider");
           };
+      // DEFAULT scorer is embeddings + signals (local, key-free, no LLM calls —
+      // seconds instead of minutes, never times out). Set SCORER=local|gemini|
+      // groq to force the LLM scorer instead; SCORER=embed (or unset) uses this.
+      const useEmbed = String(process.env.SCORER || "embed").toLowerCase() === "embed";
+      if (useEmbed) console.log("scoring via embeddings + signals (local, no LLM calls)");
       const eng = await enginePlan({
         words: job.words,
         duration: meta.duration,
         utterances: job.speakers || [],
         chapters: job.chapters || [],
         mediaPath: job.input,
+        embed: useEmbed ? embed : undefined,
         llm,
         batchSize,
         // Diversified scoring passes. The 3-pass median-merge is a quality

@@ -545,28 +545,33 @@ async function processJob(job) {
   job.stage = "finding chapters";
   saveJob(job);
   try {
-    // Chapters run on the LOCAL LLM when Ollama is up (key-free, no rate-limit
-    // stalls); Groq only if it's off. detectChapters chunks the transcript and
-    // returns partial results when the budget runs out. A hard outer race is
-    // kept as a last-resort safety so chapters can NEVER freeze the pipeline —
-    // they're a bonus, never a blocker, so an empty result just moves on.
-    const CHAP_MS = parseInt(process.env.CHAPTERS_TIMEOUT_MS || "120000");
-    let chapLlm;
+    // PRIMARY: embedding-based chapters — local, key-free, topic-aligned, and
+    // reliable for every video (no LLM to hang or return garbage). Only if that
+    // yields too few do we try the LLM detector (which itself falls back to
+    // deterministic). Chapters are a bonus, never a blocker.
+    const { chaptersByEmbedding } = require("./lib/chapters");
+    let chapters = [];
     try {
-      const localLlm = require("./lib/local-llm");
-      if (await localLlm.available()) chapLlm = localLlm.chatJSON;
-    } catch {}
-    job.chapters = await Promise.race([
-      detectChapters(transcript, meta.duration, { budgetMs: CHAP_MS, llm: chapLlm }),
-      new Promise((resolve) =>
-        setTimeout(() => {
-          console.error("detectChapters: hard cap hit — continuing without chapters.");
-          resolve([]);
-        }, CHAP_MS + 15000),
-      ),
-    ]);
+      chapters = await chaptersByEmbedding(transcript.segments || [], meta.duration, embed);
+      if (chapters.length) console.log(`chapters: ${chapters.length} via embeddings`);
+    } catch (e) {
+      console.error("embedding chapters failed:", e.message);
+    }
+    if (chapters.length < 2) {
+      const CHAP_MS = parseInt(process.env.CHAPTERS_TIMEOUT_MS || "90000");
+      let chapLlm;
+      try {
+        const localLlm = require("./lib/local-llm");
+        if (await localLlm.available()) chapLlm = localLlm.chatJSON;
+      } catch {}
+      chapters = await Promise.race([
+        detectChapters(transcript, meta.duration, { budgetMs: CHAP_MS, llm: chapLlm }),
+        new Promise((resolve) => setTimeout(() => resolve([]), CHAP_MS + 15000)),
+      ]);
+    }
+    job.chapters = chapters;
   } catch (e) {
-    console.error("detectChapters skipped:", e.message);
+    console.error("chapters skipped:", e.message);
     job.chapters = [];
   }
 

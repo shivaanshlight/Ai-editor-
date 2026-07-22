@@ -64,6 +64,25 @@ export default function Result({
     }
   };
 
+  // Chapters are computed on the SOURCE timeline, but the player shows the
+  // EDITED cut — so remap each chapter to its output time and drop any whose
+  // moment was cut entirely. This keeps the labels in sync with the video.
+  const outChapters = useMemo(() => {
+    const list = (job.chapters || [])
+      .map((c) => ({ title: c.title, outT: srcToOut(c.start, curSegs) }))
+      .filter((c): c is { title: string; outT: number } => c.outT !== null && isFinite(c.outT))
+      .sort((a, b) => a.outT - b.outT);
+    // collapse near-duplicate times created when several cut chapters map to the
+    // same surviving boundary
+    const out: typeof list = [];
+    for (const c of list) {
+      const prev = out[out.length - 1];
+      if (prev && Math.abs(c.outT - prev.outT) < 2) continue;
+      out.push(c);
+    }
+    return out;
+  }, [job.chapters, curSegs]);
+
   const saved = job.duration - curKept;
 
   return (
@@ -115,19 +134,24 @@ export default function Result({
         </div>
       </div>
 
-      {(job.chapters?.length ?? 0) > 0 && (
+      {outChapters.length > 0 && (
         <div className="mt-4">
           <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.09em] text-muted">
             Chapters — click to jump
           </div>
           <div className="flex flex-wrap gap-2">
-            {job.chapters!.map((c, i) => (
+            {outChapters.map((c, i) => (
               <button
                 key={i}
-                onClick={() => jump(c.start)}
+                onClick={() => {
+                  if (videoRef.current) {
+                    videoRef.current.currentTime = c.outT;
+                    videoRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+                  }
+                }}
                 className="flex items-center gap-2 rounded-full border border-line bg-surface2 px-3 py-1.5 text-[12.5px] hover:border-[var(--accent-2)]"
               >
-                <span className="mono text-accent2">{fmtClock(c.start)}</span>
+                <span className="mono text-accent2">{fmtClock(c.outT)}</span>
                 <span className="text-muted">{c.title}</span>
               </button>
             ))}

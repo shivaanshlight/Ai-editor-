@@ -152,15 +152,19 @@ export default function Page() {
 
   const showSetup = !activeJobId || (job && job.status === "error");
 
-  // The editor (a finished, non-clips job) renders full-bleed as an app shell —
-  // it owns the whole viewport below the nav, no centered card.
-  const isEditor =
-    !!job && job.status === "done" && !(job.clips && job.clips.length);
-  if (isEditor && job) {
+  // A finished job renders full-bleed as an app shell — it owns the whole
+  // viewport below the nav, no centered card. Clips → the clip library;
+  // everything else → the editor.
+  if (job && job.status === "done") {
+    const hasClips = !!(job.clips && job.clips.length);
     return (
       <>
         <Nav mode={mode} onMode={switchMode} />
-        <Result job={job} onRerender={onReviewRender} onNew={reset} />
+        {hasClips ? (
+          <ClipsResult job={job} vertical={clips.vertical} onNew={reset} />
+        ) : (
+          <Result job={job} onRerender={onReviewRender} onNew={reset} />
+        )}
       </>
     );
   }

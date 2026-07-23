@@ -67,42 +67,38 @@ const FEATURES: Record<Mode, Feature> = {
 export default function FeatureIntro({ mode }: { mode: Mode }) {
   const f = FEATURES[mode];
   return (
-    <section className="animate-fade-up" style={{ paddingTop: 8 }}>
+    <section className="animate-fade-up" style={{ paddingTop: 10 }}>
       <div
         style={{
-          fontSize: 11,
-          fontWeight: 800,
-          letterSpacing: ".16em",
-          color: "var(--accent)",
-          marginBottom: 12,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 7,
+          fontSize: 10.5,
+          fontWeight: 650,
+          letterSpacing: ".12em",
+          color: "var(--txt-3)",
+          marginBottom: 14,
         }}
       >
+        <span style={{ width: 5, height: 5, borderRadius: 99, background: "var(--accent)" }} />
         {f.tag}
       </div>
       <h1
         style={{
           margin: 0,
-          maxWidth: "18ch",
-          fontSize: "clamp(30px,4.4vw,44px)",
-          fontWeight: 800,
-          lineHeight: 1.04,
+          maxWidth: "20ch",
+          fontSize: "clamp(26px,3.6vw,38px)",
+          fontWeight: 680,
+          lineHeight: 1.08,
           letterSpacing: "-.03em",
+          textWrap: "balance" as any,
+          color: "var(--ink)",
         }}
       >
-        <span>{f.h1}</span>
-        <br />
-        <span
-          style={{
-            background: "var(--grad)",
-            WebkitBackgroundClip: "text",
-            backgroundClip: "text",
-            color: "transparent",
-          }}
-        >
-          {f.h2}
-        </span>
+        <span>{f.h1}</span>{" "}
+        <span style={{ color: "var(--accent)" }}>{f.h2}</span>
       </h1>
-      <p style={{ marginTop: 14, maxWidth: "60ch", fontSize: 14.5, lineHeight: 1.6, color: "var(--txt-2)" }}>
+      <p style={{ marginTop: 13, maxWidth: "58ch", fontSize: 14, lineHeight: 1.6, color: "var(--txt-2)" }}>
         {f.sub}
       </p>
 
@@ -122,23 +118,22 @@ export default function FeatureIntro({ mode }: { mode: Mode }) {
               display: "flex",
               alignItems: "center",
               gap: 11,
-              padding: "12px 13px",
-              borderRadius: 14,
-              background: "var(--panel-2)",
+              padding: "11px 12px",
+              borderRadius: 9,
+              background: "var(--panel)",
               border: "1px solid var(--hair)",
             }}
           >
             <div
               style={{
-                width: 34,
-                height: 34,
+                width: 32,
+                height: 32,
                 flex: "0 0 auto",
-                borderRadius: 10,
+                borderRadius: 8,
                 display: "grid",
                 placeItems: "center",
                 background: "var(--accent-soft)",
                 color: "var(--accent)",
-                border: "1px solid var(--hair)",
               }}
             >
               <Icon name={s.icon} size={17} />

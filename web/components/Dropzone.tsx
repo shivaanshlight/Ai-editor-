@@ -36,44 +36,41 @@ export default function Dropzone({
       style={{
         marginTop: 20,
         cursor: "pointer",
-        borderRadius: 18,
-        border: "1px solid " + (over ? "var(--accent-line)" : "var(--hair)"),
-        background:
-          "linear-gradient(180deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 40%), var(--panel-2)",
-        padding: "44px 24px",
+        borderRadius: 12,
+        border: "1px dashed " + (over ? "var(--accent)" : "var(--hair-2)"),
+        background: over ? "var(--accent-soft)" : "var(--panel)",
+        padding: "40px 24px",
         textAlign: "center",
-        transition: "border-color .18s, box-shadow .18s, transform .12s",
-        transform: over ? "translateY(-1px)" : "none",
-        boxShadow: over ? "0 0 44px -10px var(--glow-color)" : "none",
+        transition: "border-color .15s, background .15s",
       }}
     >
       <div
         style={{
-          margin: "0 auto 16px",
-          width: 62,
-          height: 62,
+          margin: "0 auto 14px",
+          width: 48,
+          height: 48,
           display: "grid",
           placeItems: "center",
-          borderRadius: 16,
-          color: "#fff",
-          background: "var(--grad)",
-          boxShadow: "0 8px 26px -6px var(--glow-color), inset 0 1px 0 rgba(255,255,255,.4)",
+          borderRadius: 11,
+          color: "var(--accent)",
+          background: "var(--accent-soft)",
+          border: "1px solid var(--hair)",
         }}
       >
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
           <path
             d="M12 16V4m0 0L7 9m5-5l5 5M4 17v2a1 1 0 001 1h14a1 1 0 001-1v-2"
             stroke="currentColor"
-            strokeWidth="1.9"
+            strokeWidth="1.8"
             strokeLinecap="round"
             strokeLinejoin="round"
           />
         </svg>
       </div>
-      <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-.01em" }}>
+      <div style={{ fontSize: 15, fontWeight: 620, letterSpacing: "-.01em" }}>
         Drop a video, or click to choose
       </div>
-      <div style={{ marginTop: 6, fontSize: 12.5, color: "var(--txt-3)" }}>
+      <div style={{ marginTop: 5, fontSize: 12, color: "var(--txt-3)" }}>
         mp4 · mov · mkv · webm — up to 2 GB, processed locally on your machine
       </div>
       <input

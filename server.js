@@ -590,28 +590,28 @@ async function processJob(job) {
         job.progress = Math.round((i / n) * 100);
       },
     );
-    job.clipPlans = validateClips(found, meta.duration, job.words, {
+    // Treat the found clip moments as keep-segments of ONE edit, so Find Clips
+    // opens in the SAME app-shell editor as AI Edit (preview + timeline + export)
+    // instead of a separate clips grid. Chronological order for a watchable cut.
+    const validated = validateClips(found, meta.duration, job.words, {
       minLen: Math.max(8, minLen * 0.7),
       maxLen,
-    }).map((c, i) => ({
-      ...c,
-      i,
-      text: textInRange(job.words, c.start, c.end).slice(0, 220),
-      // ±2 min of editable context so the timeline can extend the clip either way.
-      padStart: Math.max(0, c.start - 120),
-      padEnd: Math.min(meta.duration, c.end + 120),
-    }));
+    }).sort((a, b) => a.start - b.start);
+    const keeps = validateEdl(
+      validated.map((c) => ({ start: c.start, end: c.end })),
+      meta.duration,
+      job.words,
+    );
+    job.summary = `${validated.length} clip moment${validated.length === 1 ? "" : "s"} found — trim or drop any on the timeline, then export.`;
+    job.planStats = computePlanStats(job, keeps, meta.duration);
     if (s.review) {
-      job.status = "clipReview";
+      job.plannedKeeps = keeps;
+      job.reviewBlocks = buildBlocks(keeps, job.words, meta.duration);
+      job.status = "review";
       saveJob(job);
       return;
     }
-    return enqueueRender(job, () =>
-      renderClips(
-        job,
-        job.clipPlans.map((c) => c.i),
-      ),
-    );
+    return enqueueRender(job, () => renderJob(job, keeps));
   }
 
   // ---- M1 engine path (ai mode): segment → signals → score → decide.
@@ -927,8 +927,9 @@ async function renderJob(job, keeps) {
   job.version = (job.version || 0) + 1;
   job.output = path.join(OUTPUT_DIR, `${job.id}.v${job.version}.mp4`);
 
-  // Highlights is an edit mode too — it gets the same polish as AI edit.
-  const edit = job.mode === "ai" || job.mode === "highlights";
+  // Highlights and Clips are edit modes too — same captions/vertical/reframe
+  // polish as AI edit (Find Clips now produces one edit, not a separate grid).
+  const edit = job.mode === "ai" || job.mode === "highlights" || job.mode === "clips";
   if (edit) {
     if (s.fillerRemoval) keeps = removeFillers(keeps, job.words);
     if (s.shrinkPauses) keeps = shrinkPauses(keeps, job.words);

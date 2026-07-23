@@ -1234,12 +1234,7 @@ function buildBlocks(keeps, words, duration) {
   const out = [];
   for (const r of regions) {
     const rWords = indexed.filter((x) => x.c >= r.start && x.c < r.end);
-    const { sentenceCount, blocks } = subdivideRegion(r, rWords);
-    console.log({
-      regionLength: +(r.end - r.start).toFixed(1),
-      sentenceCount,
-      generatedBlocks: blocks.length,
-    });
+    const { blocks } = subdivideRegion(r, rWords);
     out.push(...blocks);
   }
   return out;

@@ -36,59 +36,63 @@ export default function Nav({
   };
 
   return (
-    <nav className="sticky top-0 z-30 border-b border-line bg-[color-mix(in_srgb,var(--bg)_55%,transparent)] backdrop-blur-xl">
-      <div className="mx-auto flex max-w-[1080px] items-center justify-between gap-4 px-5 py-3.5">
-        <div className="flex items-center gap-2.5 font-semibold tracking-tight">
-          <span
-            className="grid h-8 w-8 place-items-center rounded-xl text-white"
+    <nav
+      className="sticky top-0 z-30 flex h-[52px] items-center gap-4 px-4"
+      style={{ background: "var(--panel)", borderBottom: "1px solid var(--hair)" }}
+    >
+      {/* brand */}
+      <div className="flex items-center gap-2.5" style={{ fontWeight: 640, letterSpacing: "-0.02em" }}>
+        <span
+          className="grid h-[22px] w-[22px] place-items-center text-white"
+          style={{ background: "var(--grad)", borderRadius: 7 }}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+            <path d="M8 5v14l11-7z" fill="#fff" />
+          </svg>
+        </span>
+        <span className="text-[15px]">
+          edit<span style={{ color: "var(--accent)" }}>.ai</span>
+        </span>
+      </div>
+
+      <span className="hidden sm:block" style={{ width: 1, height: 18, background: "var(--hair)" }} />
+
+      {/* mode segmented control */}
+      <div
+        className="flex gap-0.5 p-0.5"
+        role="tablist"
+        style={{ background: "var(--panel-2)", border: "1px solid var(--hair)", borderRadius: 9 }}
+      >
+        {MODES.map((m) => (
+          <button
+            key={m.id}
+            role="tab"
+            aria-selected={mode === m.id}
+            onClick={() => onMode(m.id)}
+            className="px-3 py-1 text-[12px] transition-colors"
             style={{
-              background: "linear-gradient(135deg, var(--accent), var(--accent-2))",
-              boxShadow: "0 0 18px -2px rgba(55,224,255,.75), inset 0 1px 0 rgba(255,255,255,.4)",
+              fontWeight: 550,
+              borderRadius: 6,
+              color: mode === m.id ? "#fff" : "var(--txt-2)",
+              background: mode === m.id ? "var(--accent)" : "transparent",
             }}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <path d="M4 7h16M4 12h10M4 17h13" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
-            </svg>
-          </span>
-          <span className="text-[16px]">
-            edit<span className="text-accent2">.ai</span>
-          </span>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <div className="glass flex gap-0.5 rounded-2xl p-1" role="tablist">
-            {MODES.map((m) => (
-              <button
-                key={m.id}
-                role="tab"
-                aria-selected={mode === m.id}
-                onClick={() => onMode(m.id)}
-                className={`rounded-xl px-3.5 py-1.5 text-[13px] font-medium transition-all ${
-                  mode === m.id ? "text-white" : "text-muted hover:text-ink"
-                }`}
-                style={
-                  mode === m.id
-                    ? {
-                        background: "linear-gradient(135deg, var(--accent), var(--accent-2))",
-                        boxShadow: "0 0 16px -3px rgba(55,224,255,.7)",
-                      }
-                    : undefined
-                }
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
-          <button
-            onClick={toggleTheme}
-            aria-label="Toggle theme"
-            title="Light / dark"
-            className="glass grid h-9 w-9 place-items-center rounded-xl text-muted transition-colors hover:text-ink"
-          >
-            {theme === "dark" ? "☾" : "☀"}
+            {m.label}
           </button>
-        </div>
+        ))}
       </div>
+
+      <div className="flex-1" />
+
+      <button
+        onClick={toggleTheme}
+        aria-label="Toggle theme"
+        title="Light / dark"
+        className="grid h-8 w-8 place-items-center transition-colors"
+        style={{ color: "var(--txt-2)", border: "1px solid var(--hair)", borderRadius: 8, background: "var(--bg-elev)" }}
+      >
+        {theme === "dark" ? "☾" : "☀"}
+      </button>
     </nav>
   );
 }

@@ -578,7 +578,9 @@ async function processJob(job) {
   job.status = "planning";
   saveJob(job);
 
-  if (job.mode === "clips") {
+  // Legacy LLM clip finder — only when the engine is disabled. Normally clips
+  // flow through the embedding engine below (no per-chunk LLM calls that hang).
+  if (job.mode === "clips" && process.env.EDIT_ENGINE === "0") {
     const minLen = Math.round(s.clipLen * 0.6),
       maxLen = Math.round(s.clipLen * 1.5);
     const found = await findClips(
@@ -615,10 +617,15 @@ async function processJob(job) {
     );
   }
 
-  // ---- M1 engine path (ai mode): segment → signals → score → decide.
+  // ---- Engine path: segment → signals → EMBEDDING score → decide.
+  // Powers AI Edit, Highlights, and Find Clips off ONE fast local embedding
+  // pass — no per-chunk LLM calls that hang on dead Gemini / rate-limited Groq.
   // EDIT_ENGINE=0 disables it; any engine failure falls back to the legacy
   // planner below, so an upload never dies on the new path.
-  if (job.mode === "ai" && process.env.EDIT_ENGINE !== "0") {
+  if (
+    (job.mode === "ai" || job.mode === "highlights" || job.mode === "clips") &&
+    process.env.EDIT_ENGINE !== "0"
+  ) {
     try {
       const { enginePlan } = require("./lib/engine/plan");
       const { chatJSON } = require("./lib/ai");
@@ -711,6 +718,11 @@ async function processJob(job) {
         cachePath: path.join(UPLOAD_DIR, `${job.id}.scores.json`),
         telemetryPath: path.join(UPLOAD_DIR, "preferences.jsonl"),
         targetDuration: s.targetDuration ? parseFloat(s.targetDuration) : undefined,
+        // Highlights = a tighter best-of condense when no explicit target given.
+        keepFraction:
+          job.mode === "highlights" && !s.targetDuration
+            ? parseFloat(process.env.HIGHLIGHTS_KEEP || "0.35")
+            : undefined,
         onProgress: (stage, frac) => {
           job.stage = stage;
           // the engine reports overall planning progress 0..1 — drive the bar
@@ -725,6 +737,37 @@ async function processJob(job) {
           eng.scoreError,
         );
       }
+      // FIND CLIPS: the engine has scored everything — pick the top standalone
+      // windows as separate shorts (no LLM). Then the normal clip flow.
+      if (job.mode === "clips") {
+        const minLen = Math.round(s.clipLen * 0.6),
+          maxLen = Math.round(s.clipLen * 1.5);
+        const count = !s.clipCount || s.clipCount === "auto" ? 6 : parseInt(s.clipCount) || 6;
+        const found = clipsFromBlocks(eng.blocks || [], { count, minLen, maxLen });
+        job.clipPlans = validateClips(
+          found.map((c) => ({ start: c.start, end: c.end, title: "" })),
+          meta.duration,
+          job.words,
+          { minLen: Math.max(8, minLen * 0.7), maxLen },
+        ).map((c, i) => ({
+          ...c,
+          i,
+          title: clipTitle(textInRange(job.words, c.start, c.end)),
+          text: textInRange(job.words, c.start, c.end).slice(0, 220),
+          padStart: Math.max(0, c.start - 120),
+          padEnd: Math.min(meta.duration, c.end + 120),
+        }));
+        if (!job.clipPlans.length) throw new Error("no clip-worthy moments found");
+        if (s.review) {
+          job.status = "clipReview";
+          saveJob(job);
+          return;
+        }
+        return enqueueRender(job, () =>
+          renderClips(job, job.clipPlans.map((c) => c.i)),
+        );
+      }
+
       const engKeeps = validateEdl(eng.keeps, meta.duration, job.words);
       job.summary = eng.summary;
       job.planStats = computePlanStats(job, engKeeps, meta.duration);
@@ -810,6 +853,54 @@ function textInRange(words, start, end) {
     .filter((w) => w.start >= start && w.end <= end)
     .map((w) => w.word.trim())
     .join(" ");
+}
+
+/** A short, clean title from a clip's text (extractive — no LLM). */
+function clipTitle(text) {
+  let t = String(text || "")
+    .replace(/\b(um+|uh+|like|you know|so|okay|right|actually|basically|i mean)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const words = t.split(" ").filter(Boolean);
+  t = words.slice(0, 7).join(" ");
+  if (words.length > 7) t += "…";
+  return (t.charAt(0).toUpperCase() + t.slice(1)) || "Clip";
+}
+
+/**
+ * Pick the top standalone clip windows from the engine's scored blocks — no
+ * LLM. Grows windows to the target length, ranks by average score (favoring
+ * lengths near target), and greedily takes non-overlapping winners.
+ */
+function clipsFromBlocks(blocks, { count, minLen, maxLen }) {
+  const scored = (blocks || [])
+    .filter((b) => b.type !== "cut" && typeof b.start === "number")
+    .map((b) => ({ start: b.start, end: b.end, score: typeof b.score === "number" ? b.score : 60 }))
+    .sort((a, b) => a.start - b.start);
+  if (!scored.length) return [];
+  const tgt = (minLen + maxLen) / 2;
+  const cands = [];
+  for (let i = 0; i < scored.length; i++) {
+    let sum = 0, n = 0;
+    for (let j = i; j < scored.length; j++) {
+      const span = scored[j].end - scored[i].start;
+      if (span > maxLen) break;
+      sum += scored[j].score;
+      n++;
+      if (span >= minLen) {
+        const avg = sum / n;
+        cands.push({ start: scored[i].start, end: scored[j].end, rank: avg - Math.abs(span - tgt) * 0.25 });
+      }
+    }
+  }
+  cands.sort((a, b) => b.rank - a.rank);
+  const picked = [];
+  for (const c of cands) {
+    if (picked.length >= count) break;
+    if (picked.some((p) => c.start < p.end + 5 && c.end > p.start - 5)) continue; // no overlap/adjacency
+    picked.push(c);
+  }
+  return picked.sort((a, b) => a.start - b.start);
 }
 
 /**

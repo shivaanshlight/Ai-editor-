@@ -152,6 +152,19 @@ export default function Page() {
 
   const showSetup = !activeJobId || (job && job.status === "error");
 
+  // The editor (a finished, non-clips job) renders full-bleed as an app shell —
+  // it owns the whole viewport below the nav, no centered card.
+  const isEditor =
+    !!job && job.status === "done" && !(job.clips && job.clips.length);
+  if (isEditor && job) {
+    return (
+      <>
+        <Nav mode={mode} onMode={switchMode} />
+        <Result job={job} onRerender={onReviewRender} onNew={reset} />
+      </>
+    );
+  }
+
   if (demo) {
     return (
       <>

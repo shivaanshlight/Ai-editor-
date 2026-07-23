@@ -113,152 +113,122 @@ export default function Result({
 
   const saved = job.duration - curKept;
 
+  const lbl: React.CSSProperties = {
+    fontSize: 10.5, fontWeight: 650, letterSpacing: "0.09em",
+    textTransform: "uppercase", color: "var(--txt-3)",
+  };
+  const phead: React.CSSProperties = {
+    flex: "0 0 auto", height: 38, display: "flex", alignItems: "center",
+    justifyContent: "space-between", padding: "0 14px", borderBottom: "1px solid var(--hair)",
+  };
+
   return (
-    <div className="animate-fade-up">
-      {job.summary && (
-        <p className="mb-3 text-muted">Editor’s note: {job.summary}</p>
-      )}
-
-      <div className="relative">
-        <video
-          ref={videoRef}
-          controls
-          playsInline
-          src={live ? liveSrc : previewUrl(job.id, curVersion)}
-          className="max-h-[460px] w-full rounded-xl2 border border-line bg-black"
-        />
-        {/* live caption overlay (only in live mode + when there's text) */}
-        {live && caption && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-[46px] flex justify-center px-4">
-            <span
-              className="rounded-md bg-black/70 px-2.5 py-1 text-center text-[15px] font-semibold text-white"
-              style={{ textShadow: "0 1px 2px rgba(0,0,0,0.9)", maxWidth: "90%" }}
-            >
-              {caption}
-            </span>
-          </div>
-        )}
-      </div>
-
-      {/* live vs rendered toggle */}
-      <div className="mt-3 flex items-center gap-2">
-        <div className="inline-flex overflow-hidden rounded-full border border-line">
-          <button
-            onClick={() => setLive(true)}
-            className={`px-3 py-1.5 text-[12.5px] ${live ? "bg-[var(--accent)] text-white" : "bg-surface2 text-muted"}`}
-          >
-            ⚡ Live preview
-          </button>
-          <button
-            onClick={() => setLive(false)}
-            className={`px-3 py-1.5 text-[12.5px] ${!live ? "bg-[var(--accent)] text-white" : "bg-surface2 text-muted"}`}
-          >
-            Rendered
-          </button>
-        </div>
-        <span className="text-[11.5px] text-faint">
-          {live
-            ? "Edits play instantly — no render. Cuts, volume & captions are applied live."
-            : "The last exported file. Hit Export to bake in your latest changes."}
-        </span>
-      </div>
-
-      {versions.length > 1 && (
-        <div className="mt-3.5 flex flex-wrap gap-2">
-          {versions.map((v) => (
-            <button
-              key={v.v}
-              onClick={() => setCurVersion(v.v)}
-              className={`mono rounded-full border px-3 py-1.5 text-[12.5px] ${
-                v.v === curVersion
-                  ? "border-[var(--accent)] bg-[var(--mix-bg)] text-ink"
-                  : "border-line bg-surface2 text-muted"
-              }`}
-            >
-              v{v.v} · {fmt(v.keptDuration)}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className="mt-4 grid grid-cols-3 gap-px overflow-hidden rounded-xl2 border border-line bg-line">
-        <div className="bg-surface px-4 py-3.5">
-          <div className="mono text-[20px] font-medium">{fmt(job.duration)}</div>
-          <div className="mt-0.5 text-[12px] text-muted">original</div>
-        </div>
-        <div className="bg-surface px-4 py-3.5">
-          <div className="mono text-[20px] font-medium">{fmt(curKept)}</div>
-          <div className="mt-0.5 text-[12px] text-muted">this version</div>
-        </div>
-        <div className="bg-surface px-4 py-3.5">
-          <div className="mono text-[20px] font-medium text-accent">
-            −{fmt(saved)} ({pct(saved, job.duration)}%)
-          </div>
-          <div className="mt-0.5 text-[12px] text-muted">removed</div>
-        </div>
-      </div>
-
-      {outChapters.length > 0 && (
-        <div className="mt-4">
-          <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.09em] text-muted">
-            Chapters — click to jump
-          </div>
-          <div className="flex flex-wrap gap-2">
+    <div style={{ height: "calc(100vh - 52px)", display: "grid", gridTemplateRows: "1fr 236px", background: "var(--panel-2)" }}>
+      {/* ---- top: three panels ---- */}
+      <div style={{ display: "grid", gridTemplateColumns: "266px 1fr 350px", minHeight: 0 }}>
+        {/* LEFT — chapters + stats */}
+        <aside style={{ display: "flex", flexDirection: "column", minHeight: 0, borderRight: "1px solid var(--hair)", background: "var(--panel)" }}>
+          <div style={phead}><span style={lbl}>Chapters</span><span className="mono" style={{ fontSize: 10.5, color: "var(--txt-3)" }}>{outChapters.length}</span></div>
+          <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 8 }}>
+            {outChapters.length === 0 && <div style={{ padding: 12, fontSize: 12, color: "var(--txt-3)" }}>No chapters.</div>}
             {outChapters.map((c, i) => (
-              <button
+              <div
                 key={i}
-                onClick={() => {
-                  if (videoRef.current) {
-                    videoRef.current.currentTime = live ? c.srcT : c.outT;
-                    videoRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
-                  }
-                }}
-                className="flex items-center gap-2 rounded-full border border-line bg-surface2 px-3 py-1.5 text-[12.5px] hover:border-[var(--accent-2)]"
+                onClick={() => { if (videoRef.current) videoRef.current.currentTime = live ? c.srcT : c.outT; }}
+                style={{ display: "grid", gridTemplateColumns: "46px 1fr", gap: 10, alignItems: "baseline", padding: "9px 10px", borderRadius: 7, cursor: "pointer" }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-elev)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
               >
-                <span className="mono text-accent2">{fmtClock(c.outT)}</span>
-                <span className="text-muted">{c.title}</span>
-              </button>
+                <span className="mono" style={{ fontSize: 11, color: "var(--accent)" }}>{fmtClock(c.outT)}</span>
+                <span style={{ fontSize: 12.5, color: "var(--txt)", lineHeight: 1.35 }}>{c.title}</span>
+              </div>
             ))}
           </div>
-        </div>
-      )}
+          {/* stats */}
+          <div style={{ borderTop: "1px solid var(--hair)", padding: "12px 14px", background: "var(--panel-2)" }}>
+            <div style={{ ...lbl, marginBottom: 8 }}>This version</div>
+            {[["Original", fmt(job.duration), "var(--txt)"], ["Kept", fmt(curKept), "var(--txt)"], ["Removed", `−${fmt(saved)} · ${pct(saved, job.duration)}%`, "var(--accent)"]].map(([k, v, col]) => (
+              <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", fontSize: 12 }}>
+                <span style={{ color: "var(--txt-3)" }}>{k}</span>
+                <span className="mono" style={{ color: col as string }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </aside>
 
-      <Search jobId={job.id} ready={!!job.searchReady} onJump={jump} />
+        {/* CENTER — preview + transport */}
+        <section style={{ display: "flex", flexDirection: "column", minHeight: 0, background: "var(--panel-2)" }}>
+          <div style={{ flex: 1, minHeight: 0, display: "grid", placeItems: "center", padding: 20, position: "relative" }}>
+            <div style={{ position: "relative", maxHeight: "100%", maxWidth: "100%" }}>
+              <video
+                ref={videoRef}
+                controls
+                playsInline
+                src={live ? liveSrc : previewUrl(job.id, curVersion)}
+                style={{ maxHeight: "calc(100vh - 400px)", maxWidth: "100%", borderRadius: 10, border: "1px solid var(--hair-2)", background: "#000", display: "block" }}
+              />
+              {live && caption && (
+                <div style={{ position: "absolute", left: 0, right: 0, bottom: 46, display: "flex", justifyContent: "center", padding: "0 16px", pointerEvents: "none" }}>
+                  <span style={{ background: "rgba(0,0,0,0.72)", padding: "3px 10px", borderRadius: 6, textAlign: "center", fontSize: 15, fontWeight: 600, color: "#fff", textShadow: "0 1px 2px rgba(0,0,0,0.9)", maxWidth: "88%" }}>{caption}</span>
+                </div>
+              )}
+            </div>
+          </div>
+          {/* transport bar */}
+          <div style={{ flex: "0 0 auto", height: 52, display: "flex", alignItems: "center", gap: 12, padding: "0 16px", borderTop: "1px solid var(--hair)", background: "var(--panel)" }}>
+            <div style={{ display: "inline-flex", padding: 2, gap: 2, background: "var(--panel-2)", border: "1px solid var(--hair)", borderRadius: 8 }}>
+              <button onClick={() => setLive(true)} style={{ border: 0, font: "inherit", fontSize: 11.5, fontWeight: 550, padding: "4px 11px", borderRadius: 6, cursor: "pointer", color: live ? "#fff" : "var(--txt-2)", background: live ? "var(--accent)" : "transparent" }}>⚡ Live</button>
+              <button onClick={() => setLive(false)} style={{ border: 0, font: "inherit", fontSize: 11.5, fontWeight: 550, padding: "4px 11px", borderRadius: 6, cursor: "pointer", color: !live ? "#fff" : "var(--txt-2)", background: !live ? "var(--accent)" : "transparent" }}>Rendered</button>
+            </div>
+            <span style={{ fontSize: 11.5, color: "var(--txt-3)" }}>{live ? "edits play instantly — no render" : "last exported file"}</span>
+            {versions.length > 1 && (
+              <div style={{ display: "flex", gap: 4, marginLeft: 8 }}>
+                {versions.map((v) => (
+                  <button key={v.v} onClick={() => setCurVersion(v.v)} className="mono" style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, cursor: "pointer", border: "1px solid " + (v.v === curVersion ? "var(--accent)" : "var(--hair)"), background: v.v === curVersion ? "var(--mix-bg)" : "var(--bg-elev)", color: v.v === curVersion ? "var(--ink)" : "var(--txt-2)" }}>v{v.v}</button>
+                ))}
+              </div>
+            )}
+            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+              <a className="btn btn-sm" href={downloadUrl(job.id, curVersion)}>Download</a>
+              <button className="btn btn-sm" onClick={onNew}>New</button>
+              <button className="btn btn-sm btn-primary" disabled={!keeps.length} onClick={() => onRerender(keeps, wordEdits, undefined, undefined, gains)} title="Bake your edits into a final MP4">⤓ Export</button>
+            </div>
+          </div>
+        </section>
 
-      <Timeline
-        blocks={blocks}
-        origin={0}
-        dur={job.duration}
-        jobDuration={job.duration}
-        mapping={live ? "source" : "output"}
-        versionSegs={curSegs}
-        videoRef={videoRef}
-        wordEdits={wordEdits}
-        onWordEdit={(i, v) => setWordEdits((p) => ({ ...p, [i]: v }))}
-        onKeepsChange={setKeeps}
-        onGainsChange={setGains}
-        jobId={job.id}
-      />
-
-      <div className="mt-5 flex flex-wrap gap-2.5">
-        <button
-          className="btn btn-primary"
-          disabled={!keeps.length}
-          onClick={() => onRerender(keeps, wordEdits, undefined, undefined, gains)}
-          title="Bake your live edits into a final MP4"
-        >
-          ⤓ Export final video
-        </button>
-        <a className="btn" href={downloadUrl(job.id, curVersion)}>Download last export</a>
-        <button className="btn" onClick={onNew}>New video</button>
+        {/* RIGHT — tools (search / chat / content kit) */}
+        <aside style={{ display: "flex", flexDirection: "column", minHeight: 0, background: "var(--panel)" }}>
+          <div style={phead}><span style={lbl}>Tools</span></div>
+          <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 14 }}>
+            {job.summary && <p style={{ margin: "0 0 12px", fontSize: 12.5, color: "var(--txt-2)", lineHeight: 1.5 }}><b style={{ color: "var(--txt)" }}>Note:</b> {job.summary}</p>}
+            <Search jobId={job.id} ready={!!job.searchReady} onJump={jump} />
+            {job.mode !== "silence" && (
+              <>
+                <Chat jobId={job.id} ready={!!job.searchReady} onJump={jump} />
+                <ContentKit jobId={job.id} />
+              </>
+            )}
+          </div>
+        </aside>
       </div>
 
-      {job.mode !== "silence" && (
-        <>
-          <Chat jobId={job.id} ready={!!job.searchReady} onJump={jump} />
-          <ContentKit jobId={job.id} />
-        </>
-      )}
+      {/* ---- docked timeline ---- */}
+      <footer style={{ borderTop: "1px solid var(--hair)", background: "var(--panel-2)", minHeight: 0, overflow: "hidden", padding: "0 14px" }}>
+        <Timeline
+          blocks={blocks}
+          origin={0}
+          dur={job.duration}
+          jobDuration={job.duration}
+          mapping={live ? "source" : "output"}
+          versionSegs={curSegs}
+          videoRef={videoRef}
+          wordEdits={wordEdits}
+          onWordEdit={(i, v) => setWordEdits((p) => ({ ...p, [i]: v }))}
+          onKeepsChange={setKeeps}
+          onGainsChange={setGains}
+          jobId={job.id}
+        />
+      </footer>
     </div>
   );
 }

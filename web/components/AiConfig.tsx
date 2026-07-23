@@ -33,7 +33,7 @@ export default function AiConfig({
                 targetDuration: p.targetDuration,
               });
             }}
-            className={`rounded-full border px-3.5 py-1.5 text-[13px] font-medium transition-colors ${
+            className={`rounded-md border px-3 py-1.5 text-[12.5px] font-medium transition-colors ${
               activePreset === key
                 ? "border-[var(--accent)] bg-[var(--mix-bg)] text-ink"
                 : "border-line bg-surface2 text-muted hover:text-ink hover:border-line2"

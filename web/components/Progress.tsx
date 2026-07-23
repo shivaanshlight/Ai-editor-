@@ -91,10 +91,9 @@ export default function Progress({ job }: { job: Job }) {
                     fontSize: 12,
                     fontWeight: 800,
                     fontFamily: "var(--mono)",
-                    color: on ? "#fff" : "var(--txt-3)",
-                    background: done ? "var(--grad)" : active ? "var(--accent-soft)" : "var(--chip)",
+                    color: done ? "#fff" : active ? "var(--accent)" : "var(--txt-3)",
+                    background: done ? "var(--accent)" : active ? "var(--accent-soft)" : "var(--chip)",
                     border: "1px solid " + (active && !done ? "var(--accent-line)" : "var(--hair)"),
-                    boxShadow: active ? "0 0 16px -4px var(--glow-color)" : "none",
                   }}
                 >
                   {done ? (
@@ -106,7 +105,7 @@ export default function Progress({ job }: { job: Job }) {
                 <span style={{ fontSize: 11, fontWeight: 600, color: on ? "var(--txt)" : "var(--txt-3)", whiteSpace: "nowrap" }}>{s.label}</span>
               </div>
               {i < steps.length - 1 && (
-                <div style={{ flex: 1, height: 2, margin: "0 8px", marginBottom: 22, borderRadius: 2, background: done ? "var(--grad)" : "var(--hair)" }} />
+                <div style={{ flex: 1, height: 2, margin: "0 8px", marginBottom: 22, borderRadius: 2, background: done ? "var(--accent)" : "var(--hair)" }} />
               )}
             </div>
           );

@@ -11,6 +11,7 @@
     "bench": "node bench/editbench.js",
     "setup-whisper": "node scripts/setup-whisper.js",
     "setup-whisper-gpu": "node scripts/setup-whisper.js --gpu",
+    "setup-upscaler": "node scripts/setup-upscaler.js",
     "shorts": "node scripts/make-shorts.js",
     "thumbnails": "node scripts/make-thumbnails.js",
     "edit-report": "node scripts/export-edit-report.js"

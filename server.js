@@ -898,6 +898,29 @@ async function renderClips(job, selectedIdx) {
       cwd: OUTPUT_DIR,
     });
     if (subFile) fs.unlink(path.join(OUTPUT_DIR, subFile), () => {});
+
+    // AI enhance to 1080p (Real-ESRGAN, GPU). Short clips only — this is where
+    // it's practical. Best-effort: a failure keeps the original clip.
+    if (s.enhance) {
+      try {
+        const up = require("./lib/upscale");
+        if (up.available()) {
+          const enhOut = path.join(OUTPUT_DIR, `${job.id}.c${c.i}.enh.mp4`);
+          await up.upscaleVideo(out, enhOut, {
+            onProgress: (stage, frac) => {
+              job.stage = `clip ${k + 1}/${chosen.length}: ${stage}`;
+              job.progress = Math.round(((k + frac) / chosen.length) * 100);
+            },
+          });
+          fs.renameSync(enhOut, out); // replace with the enhanced version
+        } else {
+          console.error("enhance requested but Real-ESRGAN isn't installed — run: node scripts/setup-upscaler.js");
+        }
+      } catch (e) {
+        console.error("enhance failed (keeping original clip):", e.message);
+      }
+    }
+
     job.clips.push({
       i: c.i,
       title: c.title,

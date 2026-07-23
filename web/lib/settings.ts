@@ -26,6 +26,7 @@ export interface ClipsSettings {
   diarize: boolean;
   autoReframe: boolean;
   enhanceAudio: boolean;
+  enhance: boolean; // AI super-resolution to 1080p (Real-ESRGAN, GPU)
   punchIn: boolean;
   review: boolean;
   draft: boolean;
@@ -98,6 +99,7 @@ export const defaultClips: ClipsSettings = {
   diarize: false,
   autoReframe: false,
   enhanceAudio: false,
+  enhance: false,
   punchIn: true,
   review: true,
   draft: true,
@@ -232,6 +234,7 @@ export function buildFields(
       diarize: clips.diarize,
       autoReframe: clips.autoReframe,
       enhanceAudio: clips.enhanceAudio,
+      enhance: clips.enhance,
       punchIn: clips.punchIn,
       review: clips.review,
       draft: clips.draft,

@@ -7,7 +7,8 @@
 // Repair). A floating Tighten/Condense bar drives a live tightness quantile.
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { Job, Segment } from "@/lib/types";
-import { sourceUrl } from "@/lib/api";
+import { sourceUrl, fetchWords } from "@/lib/api";
+import { useLivePreview } from "./useLivePreview";
 import {
   type WUnit,
   type WState,
@@ -218,6 +219,25 @@ export default function Workspace({
   const included = useMemo(() => buildIncluded(units, status), [units, status]);
   const groups = useMemo(() => groupUnits(units, job.chapters), [units, job.chapters]);
   const source = job.duration || units.reduce((a, u) => a + u.dur, 0) || 1;
+
+  // LIVE preview right after scoring: play the SOURCE but skip the cut lines so
+  // you watch the edit take shape — no render. Toggle off to hear the raw source.
+  const [previewEdit, setPreviewEdit] = useState(true);
+  const [words, setWords] = useState<{ s: number; e: number; w: string }[]>([]);
+  const [caption, setCaption] = useState("");
+  useEffect(() => {
+    if (isDemo) return;
+    let alive = true;
+    fetchWords(job.id).then((w) => alive && setWords(w));
+    return () => {
+      alive = false;
+    };
+  }, [job.id, isDemo]);
+  const liveKeeps = useMemo(
+    () => (included as Segment[]).slice().sort((a, b) => a.start - b.start),
+    [included],
+  );
+  useLivePreview(videoRef, liveKeeps, [], words, previewEdit && !isDemo, setCaption);
   const findingByUnit = useMemo(() => {
     const m = new Map<number, string>();
     for (const o of card.orphans) m.set(o.id, "opens with a reference whose setup was cut");
@@ -492,9 +512,23 @@ export default function Workspace({
               <div style={{ position: "absolute", left: 7, top: 6, fontSize: 9.5, fontWeight: 700, letterSpacing: ".06em", color: "rgba(255,255,255,.7)", fontFamily: "var(--mono)" }}>CAM A</div>
               <div style={{ position: "absolute", right: 7, bottom: 6, fontSize: 9.5, fontWeight: 700, color: "rgba(255,255,255,.85)", fontFamily: "var(--mono)" }}>{fmt(currentTime)}</div>
             </div>
-            <button onClick={togglePlay} title="Play / pause" style={{ width: 40, height: 40, flex: "0 0 auto", borderRadius: 11, border: "1px solid var(--hair-2)", background: "var(--chip)", color: "var(--txt)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <button onClick={togglePlay} title={previewEdit ? "Play the EDIT (skips cuts) — no render" : "Play / pause"} style={{ width: 40, height: 40, flex: "0 0 auto", borderRadius: 11, border: "1px solid var(--hair-2)", background: "var(--chip)", color: "var(--txt)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <Icon name={playing ? "pause" : "play"} size={18} fill />
             </button>
+            {!isDemo && (
+              <button
+                onClick={() => setPreviewEdit((p) => !p)}
+                title="Toggle: play the edited cut (skips removed lines) vs the full raw source"
+                style={{ flex: "0 0 auto", padding: "6px 11px", borderRadius: 11, border: "1px solid var(--hair-2)", background: previewEdit ? "var(--accent, #5b8cff)" : "var(--chip)", color: previewEdit ? "#fff" : "var(--txt-2)", cursor: "pointer", fontSize: 11.5, fontWeight: 600, whiteSpace: "nowrap" }}
+              >
+                {previewEdit ? "⚡ Preview edit" : "Raw source"}
+              </button>
+            )}
+            {!isDemo && previewEdit && caption && (
+              <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--txt-2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={caption}>
+                {caption}
+              </span>
+            )}
             <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 7 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                 {activeUnit?.speaker && (

@@ -717,12 +717,20 @@ async function processJob(job) {
         instruction: s.instruction,
         cachePath: path.join(UPLOAD_DIR, `${job.id}.scores.json`),
         telemetryPath: path.join(UPLOAD_DIR, "preferences.jsonl"),
-        targetDuration: s.targetDuration ? parseFloat(s.targetDuration) : undefined,
-        // Highlights = a tighter best-of condense when no explicit target given.
-        keepFraction:
-          job.mode === "highlights" && !s.targetDuration
-            ? parseFloat(process.env.HIGHLIGHTS_KEEP || "0.35")
-            : undefined,
+        // Highlights = a SHORT best-of montage: condense to the target minutes
+        // (default 10), capped so a very long video still yields a tight reel,
+        // and noRestore so the continuity linter doesn't grow it back to full
+        // length. AI Edit keeps its normal target (or none).
+        targetDuration:
+          job.mode === "highlights"
+            ? Math.min(
+                s.targetDuration ? parseFloat(s.targetDuration) : 600,
+                meta.duration * parseFloat(process.env.HIGHLIGHTS_MAX_FRAC || "0.2"),
+              )
+            : s.targetDuration
+              ? parseFloat(s.targetDuration)
+              : undefined,
+        noRestore: job.mode === "highlights",
         onProgress: (stage, frac) => {
           job.stage = stage;
           // the engine reports overall planning progress 0..1 — drive the bar

@@ -35,6 +35,15 @@ export async function getJob(id: string): Promise<Job> {
   return jsonOrThrow(res) as Promise<Job>;
 }
 
+export async function enhanceClip(id: string, i: number): Promise<void> {
+  const res = await fetch(`/api/jobs/${id}/enhance-clip`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ i }),
+  });
+  await jsonOrThrow(res);
+}
+
 export async function renderEdit(
   id: string,
   included: Segment[],

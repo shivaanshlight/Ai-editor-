@@ -64,7 +64,6 @@ export default function ClipsConfig({
         <Toggle label="Detect speakers" hint="diarization" checked={value.diarize} onChange={(v) => set("diarize", v)} />
         <Toggle label="Auto-reframe to speaker" hint="needs speakers + vertical" checked={value.autoReframe} onChange={(v) => set("autoReframe", v)} />
         <Toggle label="Punch-in zooms" checked={value.punchIn} onChange={(v) => set("punchIn", v)} />
-        <Toggle label="Enhance to 1080p" hint="AI upscale · GPU · slower" checked={value.enhance} onChange={(v) => set("enhance", v)} />
         <Toggle label="Choose clips before render" checked={value.review} onChange={(v) => set("review", v)} />
         <Toggle label="Draft quality" hint="fast preview" checked={value.draft} onChange={(v) => set("draft", v)} />
       </div>

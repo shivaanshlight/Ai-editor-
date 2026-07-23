@@ -899,28 +899,6 @@ async function renderClips(job, selectedIdx) {
     });
     if (subFile) fs.unlink(path.join(OUTPUT_DIR, subFile), () => {});
 
-    // AI enhance to 1080p (Real-ESRGAN, GPU). Short clips only — this is where
-    // it's practical. Best-effort: a failure keeps the original clip.
-    if (s.enhance) {
-      try {
-        const up = require("./lib/upscale");
-        if (up.available()) {
-          const enhOut = path.join(OUTPUT_DIR, `${job.id}.c${c.i}.enh.mp4`);
-          await up.upscaleVideo(out, enhOut, {
-            onProgress: (stage, frac) => {
-              job.stage = `clip ${k + 1}/${chosen.length}: ${stage}`;
-              job.progress = Math.round(((k + frac) / chosen.length) * 100);
-            },
-          });
-          fs.renameSync(enhOut, out); // replace with the enhanced version
-        } else {
-          console.error("enhance requested but Real-ESRGAN isn't installed — run: node scripts/setup-upscaler.js");
-        }
-      } catch (e) {
-        console.error("enhance failed (keeping original clip):", e.message);
-      }
-    }
-
     job.clips.push({
       i: c.i,
       title: c.title,
@@ -1522,6 +1500,58 @@ app.post("/api/jobs/:id/render-clips", (req, res) => {
   res.json({ ok: true });
 });
 
+/* ---- per-clip AI enhance (Real-ESRGAN, on demand from the clip library) ----
+ * Runs as a background task that keeps status "done" (so the user stays in the
+ * clip library); progress lives on job.enhance and each finished clip gets
+ * clip.enhanced + a bumped clip.v cache-buster. Serialized so the GPU only does
+ * one clip at a time. */
+let enhancing = false;
+async function runEnhance(job, i) {
+  const clip = (job.clips || []).find((c) => c.i === i);
+  const out = path.join(OUTPUT_DIR, `${job.id}.c${i}.mp4`);
+  const up = require("./lib/upscale");
+  job.enhanceError = null;
+  job.enhance = { i, stage: "queued", pct: 0 };
+  while (enhancing) await new Promise((r) => setTimeout(r, 500)); // one at a time
+  enhancing = true;
+  try {
+    const enhOut = path.join(OUTPUT_DIR, `${job.id}.c${i}.enh.mp4`);
+    await up.upscaleVideo(out, enhOut, {
+      onProgress: (stage, frac) => {
+        job.enhance = { i, stage, pct: Math.round(frac * 100) };
+      },
+    });
+    fs.renameSync(enhOut, out); // replace clip file with the enhanced one
+    if (clip) {
+      clip.enhanced = true;
+      clip.v = (clip.v || 0) + 1;
+    }
+  } catch (e) {
+    job.enhanceError = e.message;
+    console.error("enhance-clip failed:", e.message);
+  } finally {
+    enhancing = false;
+    job.enhance = null;
+    saveJob(job);
+  }
+}
+
+app.post("/api/jobs/:id/enhance-clip", (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found." });
+  const i = parseInt(req.body.i, 10);
+  const clip = (job.clips || []).find((c) => c.i === i);
+  if (!clip) return res.status(400).json({ error: "Clip not found." });
+  const up = require("./lib/upscale");
+  if (!up.available())
+    return res.status(400).json({ error: "Enhancer isn't installed yet — run: node scripts/setup-upscaler.js" });
+  if (!fs.existsSync(path.join(OUTPUT_DIR, `${job.id}.c${i}.mp4`)))
+    return res.status(400).json({ error: "Clip file is missing — re-render this video." });
+  if (job.enhance) return res.status(409).json({ error: "Already enhancing a clip — let it finish first." });
+  runEnhance(job, i); // background; poll GET /api/jobs/:id for progress
+  res.json({ ok: true });
+});
+
 app.get("/api/jobs/:id", (req, res) => {
   const job = jobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: "Job not found." });
@@ -1563,6 +1593,13 @@ app.get("/api/jobs/:id", (req, res) => {
   if (job.stage) payload.stage = job.stage;
   if (status === "clipReview") payload.clipPlans = job.clipPlans;
   if (job.clips) payload.clips = job.clips;
+  if (job.enhance) payload.enhance = job.enhance;
+  if (job.enhanceError) payload.enhanceError = job.enhanceError;
+  if (status === "done" && (job.clips || []).length) {
+    try {
+      payload.enhancerReady = require("./lib/upscale").available();
+    } catch {}
+  }
   if (job.chapters?.length) payload.chapters = job.chapters;
   // Distinct speaker labels (for the "name your speakers" panel) + any saved names.
   if ((job.speakers || []).length) {

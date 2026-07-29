@@ -14,13 +14,59 @@
     "setup-upscaler": "node scripts/setup-upscaler.js",
     "shorts": "node scripts/make-shorts.js",
     "thumbnails": "node scripts/make-thumbnails.js",
-    "edit-report": "node scripts/export-edit-report.js"
+    "edit-report": "node scripts/export-edit-report.js",
+    "electron": "electron .",
+    "dist": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
     "@xenova/transformers": "^2.17.2",
     "express": "^4.19.2",
+    "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0",
     "multer": "^1.4.5-lts.1"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "ai.edit.desktop",
+    "productName": "edit.ai",
+    "asar": false,
+    "extraMetadata": { "main": "electron/main.js" },
+    "files": [
+      "server.js",
+      "electron/**",
+      "lib/**",
+      "scripts/**",
+      "public/**",
+      ".env.example",
+      "node_modules/**",
+      "!web/**",
+      "!bench/**",
+      "!test/**",
+      "!**/*.map",
+      "!**/*.ts",
+      "!uploads/**",
+      "!outputs/**",
+      "!.models/**",
+      "!bin/**",
+      "!models/**",
+      "!dist/**"
+    ],
+    "win": { "target": "nsis" },
+    "mac": { "target": "dmg" },
+    "linux": { "target": "AppImage" },
+    "nsis": {
+      "perMachine": false,
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "edit.ai"
+    }
   },
   "engines": {
     "node": ">=18"

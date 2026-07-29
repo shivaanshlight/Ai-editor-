@@ -3,3 +3,7 @@ node_modules/
 uploads/
 outputs/
 web/vite-dist/
+dist/
+bin/
+models/
+.models/

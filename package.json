@@ -15,7 +15,7 @@
     "shorts": "node scripts/make-shorts.js",
     "thumbnails": "node scripts/make-thumbnails.js",
     "edit-report": "node scripts/export-edit-report.js",
-    "electron": "electron .",
+    "electron": "electron electron/main.js",
     "dist": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
     "dist:linux": "electron-builder --linux"

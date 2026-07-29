@@ -26,7 +26,9 @@ jobs:
         run: npm install
 
       - name: Build the installer
-        run: npm run dist
+        # --publish never: just build the .exe, don't try to push it to a GitHub
+        # release (which would need a token). We grab it as an artifact instead.
+        run: npm run dist -- --publish never
 
       - name: Upload the installer
         uses: actions/upload-artifact@v4

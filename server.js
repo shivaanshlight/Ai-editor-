@@ -17,6 +17,25 @@ try {
   }
 } catch {}
 
+// Prefer the bundled ffmpeg/ffprobe (ffmpeg-static / ffprobe-static) so the app
+// works in EVERY launch mode — `node server.js`, `npm run electron`, and the
+// packaged installer — without a system ffmpeg install on PATH. This is what
+// fixes "ffprobe failed — is this a valid video file?" on a clean machine.
+try {
+  const ffdirs = [];
+  try {
+    ffdirs.push(path.dirname(require("ffmpeg-static")));
+  } catch {}
+  try {
+    ffdirs.push(path.dirname(require("ffprobe-static").path));
+  } catch {}
+  if (ffdirs.length)
+    process.env.PATH =
+      ffdirs.join(path.delimiter) +
+      path.delimiter +
+      (process.env.PATH || "");
+} catch {}
+
 const express = require("express");
 const multer = require("multer");
 const {

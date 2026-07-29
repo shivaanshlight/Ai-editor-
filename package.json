@@ -2,6 +2,7 @@
   "name": "clipsurgeon",
   "version": "0.5.0",
   "description": "AI video editor - prompt-based editing with human review, timeline adjustment, version history, karaoke captions, music",
+  "author": "edit.ai",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
@@ -17,6 +18,7 @@
     "edit-report": "node scripts/export-edit-report.js",
     "electron": "electron electron/main.js",
     "dist": "electron-builder --win",
+    "dist:zip": "electron-builder --win zip",
     "dist:mac": "electron-builder --mac",
     "dist:linux": "electron-builder --linux"
   },
